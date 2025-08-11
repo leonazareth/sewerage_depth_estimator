@@ -907,7 +907,7 @@ class SewerageDepthEstimatorDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             self._prepare_selected_features(selected_features, layer, dem_layer)
 
             # Calculate depths using tree algorithm
-            self._calculate_tree_depths(selected_features, layer, min_cover, diameter, slope, initial_depth)
+            self._calculate_tree_depths(selected_features, layer, dem_layer, min_cover, diameter, slope, initial_depth)
 
             if self.iface:
                 self.iface.messageBar().pushSuccess("Sewerage Depth Estimator", 
@@ -1009,7 +1009,7 @@ class SewerageDepthEstimatorDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             except Exception as e:
                 print(f"[SEWERAGE DEBUG] Error preparing feature {feature.id()}: {e}")
 
-    def _calculate_tree_depths(self, selected_features, layer, min_cover, diameter, slope, initial_depth):
+    def _calculate_tree_depths(self, selected_features, layer, dem_layer, min_cover, diameter, slope, initial_depth):
         """Calculate depths using tree traversal algorithm for open sewerage networks"""
         from qgis.core import QgsPointXY
         
@@ -1068,8 +1068,47 @@ class SewerageDepthEstimatorDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 continue
 
             if p1_elev is None or p2_elev is None:
-                print(f"[SEWERAGE DEBUG]   Skipping feature {feature.id()}: missing elevations (p1={p1_elev}, p2={p2_elev})")
-                continue
+                print(f"[SEWERAGE DEBUG]   Feature {feature.id()} missing elevations (p1={p1_elev}, p2={p2_elev}) - trying to interpolate now...")
+                
+                # Try to interpolate missing elevations on the fly
+                try:
+                    from .elevation_floater import RasterInterpolator
+                    from qgis.core import QgsCoordinateTransform, QgsProject
+                    
+                    interpolator_temp = RasterInterpolator(dem_layer, band=1)
+                    transform_context = QgsProject.instance().transformContext()
+                    to_raster_temp = QgsCoordinateTransform(layer.crs(), dem_layer.crs(), transform_context)
+                except Exception as ex:
+                    print(f"[SEWERAGE DEBUG]   Error setting up interpolator: {ex}, skipping feature {feature.id()}")
+                    continue
+                
+                # Try to interpolate missing values
+                if p1_elev is None and p1_elev_idx >= 0:
+                    try:
+                        p1_raster = to_raster_temp.transform(p1)
+                        elev = interpolator_temp.bilinear(p1_raster)
+                        if elev is not None:
+                            p1_elev = round(float(elev), 2)
+                            layer.changeAttributeValue(feature.id(), p1_elev_idx, p1_elev)
+                            print(f"[SEWERAGE DEBUG]   Interpolated P1 elevation on-the-fly: {p1_elev}m")
+                    except Exception as ex:
+                        print(f"[SEWERAGE DEBUG]   Error interpolating P1: {ex}")
+                
+                if p2_elev is None and p2_elev_idx >= 0:
+                    try:
+                        p2_raster = to_raster_temp.transform(p2)
+                        elev = interpolator_temp.bilinear(p2_raster)
+                        if elev is not None:
+                            p2_elev = round(float(elev), 2)
+                            layer.changeAttributeValue(feature.id(), p2_elev_idx, p2_elev)
+                            print(f"[SEWERAGE DEBUG]   Interpolated P2 elevation on-the-fly: {p2_elev}m")
+                    except Exception as ex:
+                        print(f"[SEWERAGE DEBUG]   Error interpolating P2: {ex}")
+                
+                # Check again if we have elevations now
+                if p1_elev is None or p2_elev is None:
+                    print(f"[SEWERAGE DEBUG]   Still missing elevations after interpolation attempt, skipping feature {feature.id()}")
+                    continue
 
             # Calculate segment length
             seg_length = ((p2.x() - p1.x()) ** 2 + (p2.y() - p1.y()) ** 2) ** 0.5
@@ -1108,11 +1147,11 @@ class SewerageDepthEstimatorDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         # Process each tree starting from roots
         for root_idx in roots:
             print(f"[SEWERAGE DEBUG] Processing tree starting from root segment {root_idx}")
-            self._process_tree_branch(root_idx, segments, node_connections, layer, 
+            self._process_tree_branch(root_idx, segments, node_connections, layer, dem_layer,
                                     min_cover, diameter, slope, initial_depth,
                                     p1_h_idx, p2_h_idx)
 
-    def _process_tree_branch(self, seg_idx, segments, node_connections, layer,
+    def _process_tree_branch(self, seg_idx, segments, node_connections, layer, dem_layer,
                            min_cover, diameter, slope, initial_depth,
                            p1_h_idx, p2_h_idx):
         """Process a branch of the tree starting from given segment"""
@@ -1144,17 +1183,37 @@ class SewerageDepthEstimatorDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             else:
                 print(f"[SEWERAGE DEBUG]     Using provided upstream depth: {upstream_depth:.2f}m")
             
-            # Calculate downstream depth considering slope and minimum cover
+            # Calculate downstream depth considering terrain, slope and minimum cover
+            p1_elev = segment['p1_elev']
+            p2_elev = segment['p2_elev']
+            elevation_diff = p1_elev - p2_elev  # Positive if P1 is higher than P2
+            
+            # Calculate upstream bottom elevation (invert)
+            upstream_bottom_elev = p1_elev - upstream_depth
+            
+            # Calculate required downstream bottom elevation based on slope
             fall = segment['length'] * slope
-            downstream_candidate = upstream_depth + fall
+            downstream_bottom_elev = upstream_bottom_elev - fall  # Bottom should be lower downstream
+            
+            # Calculate downstream depth from ground
+            downstream_depth_candidate = p2_elev - downstream_bottom_elev
             
             # Enforce minimum cover at downstream
-            min_downstream = min_cover + diameter
-            downstream_depth = max(downstream_candidate, min_downstream)
+            min_downstream_depth = min_cover + diameter
+            downstream_depth = max(downstream_depth_candidate, min_downstream_depth)
             
-            print(f"[SEWERAGE DEBUG]     Calculations: length={segment['length']:.2f}m, slope={slope}, fall={fall:.3f}m")
-            print(f"[SEWERAGE DEBUG]     Downstream candidate: {downstream_candidate:.2f}m, min_required: {min_downstream:.2f}m")
+            # If we had to adjust for minimum cover, recalculate the actual slope achieved
+            actual_downstream_bottom = p2_elev - downstream_depth
+            actual_fall = upstream_bottom_elev - actual_downstream_bottom
+            actual_slope = actual_fall / segment['length'] if segment['length'] > 0 else 0
+            
+            print(f"[SEWERAGE DEBUG]     Terrain elevations: P1={p1_elev:.2f}m, P2={p2_elev:.2f}m, diff={elevation_diff:.2f}m")
+            print(f"[SEWERAGE DEBUG]     Upstream bottom elev: {upstream_bottom_elev:.2f}m (ground {p1_elev:.2f}m - depth {upstream_depth:.2f}m)")
+            print(f"[SEWERAGE DEBUG]     Required fall: {fall:.3f}m (length={segment['length']:.2f}m × slope={slope})")
+            print(f"[SEWERAGE DEBUG]     Target downstream bottom: {downstream_bottom_elev:.2f}m")
+            print(f"[SEWERAGE DEBUG]     Downstream depth candidate: {downstream_depth_candidate:.2f}m, min_required: {min_downstream_depth:.2f}m")
             print(f"[SEWERAGE DEBUG]     Final downstream depth: {downstream_depth:.2f}m")
+            print(f"[SEWERAGE DEBUG]     Actual slope achieved: {actual_slope:.4f} m/m")
             
             # Write depths to feature
             feature = segment['feature']
