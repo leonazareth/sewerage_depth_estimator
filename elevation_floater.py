@@ -945,6 +945,9 @@ class ElevationFloaterController(QtCore.QObject):
             print("[SEWERAGE DEBUG] Early return - missing clicks or layer")
             return
         
+        # Keep a copy of current clicks for downstream recalculation
+        stored_clicks_copy = list(self._stored_clicks)
+
         try:
             print(f"[SEWERAGE DEBUG] Layer is editable: {self._current_layer.isEditable()}")
             print(f"[SEWERAGE DEBUG] Layer feature count: {self._current_layer.featureCount()}")
@@ -1021,7 +1024,29 @@ class ElevationFloaterController(QtCore.QObject):
                 return
             
             # Match segments to click pairs
-            self._match_and_write_attributes(candidate_features)
+            matches_found = self._match_and_write_attributes(candidate_features)
+
+            # If we wrote attributes, attempt downstream recalculation based on last click
+            try:
+                if matches_found > 0 and stored_clicks_copy:
+                    end_click = stored_clicks_copy[-1]
+                    end_point = end_click.get('map_point')
+                    end_depth = end_click.get('depth')
+                    if end_point is not None and end_depth is not None:
+                        print(f"[SEWERAGE DEBUG] Trigger downstream recalculation from end point ({end_point.x():.3f}, {end_point.y():.3f}) with depth {end_depth:.3f}")
+                        # Exclude new features from traversal (use non-negative IDs if available)
+                        exclude_ids = set([feat.id() for feat, _ in candidate_features])
+                        self._recalculate_downstream_from_connection(end_point, float(end_depth), exclude_ids)
+                else:
+                    print("[SEWERAGE DEBUG] Skipping downstream recalculation: no matches found or no end point/depth")
+            except Exception as e:
+                print(f"[SEWERAGE DEBUG] Downstream recalculation error: {e}")
+            
+            print(f"[SEWERAGE DEBUG] Total matches found: {matches_found}")
+            
+            # Always clear stored clicks at end of processing cycle
+            self._stored_clicks = []
+            print("[SEWERAGE DEBUG] Cleared stored clicks after processing cycle")
             
         except Exception as e:
             print(f"[SEWERAGE DEBUG] Error in _process_new_segments: {e}")
@@ -1033,7 +1058,7 @@ class ElevationFloaterController(QtCore.QObject):
         
         if not self._stored_clicks or len(self._stored_clicks) < 2:
             print(f"[SEWERAGE DEBUG] Not enough stored clicks: {len(self._stored_clicks)}")
-            return
+            return 0
         
         # Debug: Print stored clicks
         for i, click in enumerate(self._stored_clicks):
@@ -1045,7 +1070,7 @@ class ElevationFloaterController(QtCore.QObject):
         
         if not field_mapping:
             print("[SEWERAGE DEBUG] No field mapping available")
-            return
+            return 0
         
         try:
             # Sort features by ID (most negative first, which corresponds to creation order)
@@ -1097,17 +1122,136 @@ class ElevationFloaterController(QtCore.QObject):
                     print(f"[SEWERAGE DEBUG] Failed to write attributes for feature {feat.id()}")
             
             print(f"[SEWERAGE DEBUG] Total matches found: {matches_found}")
-            
-            # Only clear stored clicks if we actually wrote some attributes
-            if matches_found > 0:
-                self._stored_clicks = []
-                print("[SEWERAGE DEBUG] Cleared stored clicks after successful attribute writing")
-            else:
-                print("[SEWERAGE DEBUG] No matches found - keeping stored clicks for future attempts")
-            
+            return matches_found
         except Exception as e:
             print(f"[SEWERAGE DEBUG] Error in _match_and_write_attributes: {e}")
-            pass
+            return 0
+
+    # --- Downstream recalculation ---------------------------------------------
+    def _recalculate_downstream_from_connection(self, connection_point: QgsPointXY, new_upstream_depth: float, exclude_ids: set):
+        """If connection_point is the upstream of an existing segment, update p1 depth and
+        propagate downstream depths along connected chain using current parameters.
+
+        exclude_ids: feature IDs to ignore (e.g., the just-added new features)
+        """
+        try:
+            if not self._current_layer:
+                return
+            field_mapping = self._get_field_mapping()
+            p1e = field_mapping.get('p1_elev', -1)
+            p2e = field_mapping.get('p2_elev', -1)
+            p1h = field_mapping.get('p1_h', -1)
+            p2h = field_mapping.get('p2_h', -1)
+            if min(p1e, p2e, p1h, p2h) < 0:
+                print("[SEWERAGE DEBUG] Missing required fields for downstream recalc")
+                return
+
+            # Build index of features by their upstream (p1) coordinate
+            def key_from_point(pt: QgsPointXY) -> str:
+                return f"{pt.x():.6f},{pt.y():.6f}"
+
+            p1_index = {}
+            features = list(self._current_layer.getFeatures())
+            for f in features:
+                try:
+                    if f.id() in exclude_ids:
+                        continue
+                    g = f.geometry()
+                    if not g or g.isEmpty():
+                        continue
+                    if g.isMultipart():
+                        lines = g.asMultiPolyline()
+                        if not lines:
+                            continue
+                        pts = lines[0]
+                    else:
+                        pts = g.asPolyline()
+                    if len(pts) < 2:
+                        continue
+                    k = key_from_point(QgsPointXY(pts[0]))
+                    p1_index.setdefault(k, []).append((f, pts))
+                except Exception:
+                    continue
+
+            start_key = key_from_point(connection_point)
+            if start_key not in p1_index:
+                print("[SEWERAGE DEBUG] No existing segment with this point as upstream (p1); skipping recalc")
+                return
+
+            # Use first matching segment (if multiple, choose smallest ID)
+            candidate_list = p1_index[start_key]
+            candidate_list.sort(key=lambda tup: tup[0].id())
+            current_feature, current_pts = candidate_list[0]
+
+            # Ensure layer is editable
+            if not self._current_layer.isEditable():
+                self._current_layer.startEditing()
+
+            visited = set()
+            upstream_depth = float(new_upstream_depth)
+            current_upstream_point = QgsPointXY(current_pts[0])
+
+            while current_feature and current_feature.id() not in visited:
+                visited.add(current_feature.id())
+                # Read ground elevations
+                p1_ground = current_feature.attribute(p1e)
+                p2_ground = current_feature.attribute(p2e)
+                try:
+                    p1_ground = float(p1_ground) if p1_ground is not None else None
+                    p2_ground = float(p2_ground) if p2_ground is not None else None
+                except Exception:
+                    p1_ground = p2_ground = None
+
+                # Update p1_h if needed (adopt the larger new upstream depth)
+                try:
+                    existing_p1_h_val = current_feature.attribute(p1h)
+                    existing_p1_h = float(existing_p1_h_val) if existing_p1_h_val not in (None, '') else None
+                except Exception:
+                    existing_p1_h = None
+
+                effective_p1_depth = upstream_depth
+                if existing_p1_h is not None and existing_p1_h > effective_p1_depth:
+                    effective_p1_depth = existing_p1_h
+
+                # Write p1_h if changed
+                if existing_p1_h is None or abs(existing_p1_h - effective_p1_depth) > 1e-3:
+                    self._current_layer.changeAttributeValue(current_feature.id(), p1h, round(effective_p1_depth, 2))
+
+                # Compute downstream bottom and depth
+                if p1_ground is None or p2_ground is None:
+                    print(f"[SEWERAGE DEBUG] Missing ground elevation on feature {current_feature.id()}, stopping")
+                    break
+
+                upstream_bottom = p1_ground - effective_p1_depth
+                # Distance between endpoints in meters
+                seg_len = self._distance_m(QgsPointXY(current_pts[0]), QgsPointXY(current_pts[-1]))
+                bottom_candidate = upstream_bottom - seg_len * max(0.0, float(self.slope_m_per_m))
+
+                # Enforce minimum cover at downstream
+                min_cover_mm = int(round(float(self.minimum_cover_m) * 1000))
+                diameter_mm = int(round(float(self.diameter_m) * 1000))
+                total_depth = (min_cover_mm + diameter_mm) / 1000.0
+                min_bottom = float(p2_ground) - total_depth
+                downstream_bottom = min(bottom_candidate, min_bottom)
+                downstream_depth = float(p2_ground) - downstream_bottom
+
+                # Write p2_h
+                self._current_layer.changeAttributeValue(current_feature.id(), p2h, round(downstream_depth, 2))
+
+                # Advance to next feature where its p1 equals current p2
+                next_key = key_from_point(QgsPointXY(current_pts[-1]))
+                next_candidates = p1_index.get(next_key, [])
+                # Remove already visited
+                next_candidates = [(f, pts) for (f, pts) in next_candidates if f.id() not in visited]
+                if not next_candidates:
+                    break
+                next_candidates.sort(key=lambda tup: tup[0].id())
+                current_feature, current_pts = next_candidates[0]
+                upstream_depth = downstream_depth
+
+            print("[SEWERAGE DEBUG] Downstream recalculation complete")
+        except Exception as e:
+            print(f"[SEWERAGE DEBUG] Error in downstream recalculation: {e}")
 
     def _get_field_mapping(self):
         """Get field mapping from dock widget"""
