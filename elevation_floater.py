@@ -367,9 +367,9 @@ class ElevationFloaterController(QtCore.QObject):
                 snap_match = self.snapper.snapToMap(screen_pos)
                 if snap_match.isValid():
                     snapped_pt = snap_match.point()
-                    # If we snapped to a vertex, get the depth from that feature
-                    if not self._have_upstream:  # Only before first click
-                        snap_depth = self._get_depth_from_snap_match(snap_match)
+                    # If we snapped, compute max coincident depth at snapped coord (before first click)
+                    if not self._have_upstream:
+                        snap_depth = self._find_existing_depth_at_point(snapped_pt, None)
             
             # Store snap depth for use in _compose_text
             self._current_snap_depth = snap_depth
@@ -517,12 +517,12 @@ class ElevationFloaterController(QtCore.QObject):
             # Emergency fallback
             return self.canvas.getCoordinateTransform().toMapCoordinates(screen_pos.x(), screen_pos.y())
 
-    def _find_existing_depth_at_point(self, map_pt: QgsPointXY, tolerance=0.001):
+    def _find_existing_depth_at_point(self, map_pt: QgsPointXY, tolerance: Optional[float] = None):
         """Find existing segment depth at the given coordinates
         
         Args:
             map_pt: Point coordinates to search for
-            tolerance: Search tolerance in map units (default 1mm)
+            tolerance: Search tolerance in map units. If None, uses a small pixel-based tolerance.
             
         Returns:
             float or None: Maximum existing depth value if any coincident endpoints are found, None otherwise
@@ -531,6 +531,13 @@ class ElevationFloaterController(QtCore.QObject):
             return None
             
         try:
+            # Derive tolerance from pixels if not provided
+            if tolerance is None and self.canvas is not None:
+                # 5 pixels radius converted to map units
+                tolerance = max(self.canvas.mapUnitsPerPixel() * 5.0, 1e-6)
+            elif tolerance is None:
+                tolerance = 0.001
+
             # Get field mappings for depth fields
             field_mapping = self._get_field_mapping()
             p1_h_idx = field_mapping.get('p1_h', -1)
@@ -548,6 +555,20 @@ class ElevationFloaterController(QtCore.QObject):
             # Get all features in the search area
             request = QgsFeatureRequest().setFilterRect(search_rect)
             features = list(self._current_layer.getFeatures(request))
+
+            # Also inspect edit buffer added features if present
+            try:
+                eb = self._current_layer.editBuffer()
+                if eb:
+                    for f in eb.addedFeatures().values():
+                        try:
+                            g = f.geometry()
+                            if g and not g.isEmpty() and g.boundingBox().intersects(search_rect):
+                                features.append(f)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
             
             print(f"[SEWERAGE DEBUG] Searching for existing depth at {map_pt.x():.6f}, {map_pt.y():.6f}")
             print(f"[SEWERAGE DEBUG] Found {len(features)} features in search area")
@@ -566,25 +587,25 @@ class ElevationFloaterController(QtCore.QObject):
                         lines = geom.asMultiPolyline()
                         if not lines:
                             continue
-                        pts = lines[0]
+                        # Evaluate all parts to catch endpoints that coincide
+                        parts = lines
                     else:
-                        pts = geom.asPolyline()
+                        parts = [geom.asPolyline()]
                 except Exception:
                     continue
-                if len(pts) < 2:
-                    continue
-                p1 = QgsPointXY(pts[0])
-                p2 = QgsPointXY(pts[-1])
-                
-                # Check proximity to start/end
-                d1 = ((p1.x() - map_pt.x()) ** 2 + (p1.y() - map_pt.y()) ** 2) ** 0.5
-                d2 = ((p2.x() - map_pt.x()) ** 2 + (p2.y() - map_pt.y()) ** 2) ** 0.5
-                
                 candidate_depths = []
-                if d1 <= tolerance and p1_h_idx >= 0:
-                    candidate_depths.append(feature.attribute(p1_h_idx))
-                if d2 <= tolerance and p2_h_idx >= 0:
-                    candidate_depths.append(feature.attribute(p2_h_idx))
+                for pts in parts:
+                    if len(pts) < 2:
+                        continue
+                    p1 = QgsPointXY(pts[0])
+                    p2 = QgsPointXY(pts[-1])
+                    # Check proximity to start/end
+                    d1 = ((p1.x() - map_pt.x()) ** 2 + (p1.y() - map_pt.y()) ** 2) ** 0.5
+                    d2 = ((p2.x() - map_pt.x()) ** 2 + (p2.y() - map_pt.y()) ** 2) ** 0.5
+                    if d1 <= tolerance and p1_h_idx >= 0:
+                        candidate_depths.append(feature.attribute(p1_h_idx))
+                    if d2 <= tolerance and p2_h_idx >= 0:
+                        candidate_depths.append(feature.attribute(p2_h_idx))
                 
                 for val in candidate_depths:
                     if val is None or val == '':
@@ -716,7 +737,7 @@ class ElevationFloaterController(QtCore.QObject):
             self._upstream_ground_elev = float(elev) if elev is not None else None
             
             # Check for existing depth at this coordinate (with preference over initial_depth_m)
-            existing_depth = self._find_existing_depth_at_point(map_pt)
+            existing_depth = self._find_existing_depth_at_point(map_pt, None)
             effective_initial_depth = self.initial_depth_m
             
             if existing_depth is not None:
