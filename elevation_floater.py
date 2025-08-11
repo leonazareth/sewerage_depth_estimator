@@ -557,40 +557,46 @@ class ElevationFloaterController(QtCore.QObject):
                 geom = feature.geometry()
                 if not geom or geom.isEmpty():
                     continue
-                    
-                # Check if this is a linestring
                 if geom.type() != QgsWkbTypes.LineGeometry:
                     continue
-                    
-                # Get first and last vertices
-                vertices = []
-                for part in geom.asGeometryCollection() if geom.isMultipart() else [geom]:
-                    if part.type() == QgsWkbTypes.LineGeometry:
-                        line = part.asPolyline() if not part.isMultipart() else part.asMultiLinestring()[0]
-                        if len(line) >= 2:
-                            vertices.extend([line[0], line[-1]])  # First and last points
                 
-                # Check if any vertex matches our point
-                for i, vertex in enumerate(vertices):
-                    distance = ((vertex.x() - map_pt.x()) ** 2 + (vertex.y() - map_pt.y()) ** 2) ** 0.5
-                    if distance <= tolerance:
-                        # Found a matching vertex - get corresponding depth
-                        if i % 2 == 0 and p1_h_idx >= 0:  # Even index = first vertex = p1
-                            depth_value = feature.attribute(p1_h_idx)
-                        elif i % 2 == 1 and p2_h_idx >= 0:  # Odd index = last vertex = p2  
-                            depth_value = feature.attribute(p2_h_idx)
-                        else:
+                # Resolve first and last points of the polyline
+                try:
+                    if geom.isMultipart():
+                        lines = geom.asMultiPolyline()
+                        if not lines:
                             continue
-                            
-                        if depth_value is not None and depth_value != '':
-                            try:
-                                depth_float = float(depth_value)
-                                print(f"[SEWERAGE DEBUG] Candidate depth {depth_float:.3f}m at vertex {i//2 + 1} of feature {feature.id()}")
-                                if max_depth is None or depth_float > max_depth:
-                                    max_depth = depth_float
-                            except (ValueError, TypeError):
-                                continue
-                                
+                        pts = lines[0]
+                    else:
+                        pts = geom.asPolyline()
+                except Exception:
+                    continue
+                if len(pts) < 2:
+                    continue
+                p1 = QgsPointXY(pts[0])
+                p2 = QgsPointXY(pts[-1])
+                
+                # Check proximity to start/end
+                d1 = ((p1.x() - map_pt.x()) ** 2 + (p1.y() - map_pt.y()) ** 2) ** 0.5
+                d2 = ((p2.x() - map_pt.x()) ** 2 + (p2.y() - map_pt.y()) ** 2) ** 0.5
+                
+                candidate_depths = []
+                if d1 <= tolerance and p1_h_idx >= 0:
+                    candidate_depths.append(feature.attribute(p1_h_idx))
+                if d2 <= tolerance and p2_h_idx >= 0:
+                    candidate_depths.append(feature.attribute(p2_h_idx))
+                
+                for val in candidate_depths:
+                    if val is None or val == '':
+                        continue
+                    try:
+                        depth_float = float(val)
+                        print(f"[SEWERAGE DEBUG] Candidate depth {depth_float:.3f}m on feature {feature.id()}")
+                        if max_depth is None or depth_float > max_depth:
+                            max_depth = depth_float
+                    except (ValueError, TypeError):
+                        continue
+            
         except Exception as e:
             print(f"[SEWERAGE DEBUG] Error searching for existing depth: {e}")
             
