@@ -22,6 +22,9 @@ from qgis.core import (
     QgsMapLayer,
     QgsRaster,
     QgsRectangle,
+    QgsVectorLayer,
+    QgsFeatureRequest,
+    QgsWkbTypes,
 )
 
 
@@ -260,6 +263,8 @@ class ElevationFloaterController(QtCore.QObject):
         self._upstream_map_point: Optional[QgsPointXY] = None
         self._upstream_ground_elev: Optional[float] = None
         self._upstream_bottom_elev: Optional[float] = None
+        # Track when we inherit depth from existing segment
+        self._inherited_depth: Optional[float] = None
         # Optional dedicated measure CRS
         self._measure_crs: Optional[QgsCoordinateReferenceSystem] = None
         # Style
@@ -418,7 +423,12 @@ class ElevationFloaterController(QtCore.QObject):
                     depth_val = float(elev) - downstream_bottom
                 else:
                     depth_val = float('nan')
-                lines.append(f"depth={depth_val:.2f}")
+                
+                # Show if this is first point and depth was inherited
+                if dist < 0.01 and self._inherited_depth is not None:  # Within 1cm = first click
+                    lines.append(f"depth={depth_val:.2f} (inherited)")
+                else:
+                    lines.append(f"depth={depth_val:.2f}")
             except Exception:
                 pass
         if not lines:
@@ -477,6 +487,83 @@ class ElevationFloaterController(QtCore.QObject):
         except Exception:
             # Emergency fallback
             return self.canvas.getCoordinateTransform().toMapCoordinates(screen_pos.x(), screen_pos.y())
+
+    def _find_existing_depth_at_point(self, map_pt: QgsPointXY, tolerance=0.001):
+        """Find existing segment depth at the given coordinates
+        
+        Args:
+            map_pt: Point coordinates to search for
+            tolerance: Search tolerance in map units (default 1mm)
+            
+        Returns:
+            float or None: Existing depth value if found, None otherwise
+        """
+        if not self._current_layer:
+            return None
+            
+        try:
+            # Get field mappings for depth fields
+            field_mapping = self._get_field_mapping()
+            p1_h_idx = field_mapping.get('p1_h', -1)
+            p2_h_idx = field_mapping.get('p2_h', -1)
+            
+            if p1_h_idx < 0 and p2_h_idx < 0:
+                return None  # No depth fields available
+            
+            # Search for features with endpoints at or very near this coordinate
+            search_rect = QgsRectangle(
+                map_pt.x() - tolerance, map_pt.y() - tolerance,
+                map_pt.x() + tolerance, map_pt.y() + tolerance
+            )
+            
+            # Get all features in the search area
+            request = QgsFeatureRequest().setFilterRect(search_rect)
+            features = list(self._current_layer.getFeatures(request))
+            
+            print(f"[SEWERAGE DEBUG] Searching for existing depth at {map_pt.x():.6f}, {map_pt.y():.6f}")
+            print(f"[SEWERAGE DEBUG] Found {len(features)} features in search area")
+            
+            for feature in features:
+                geom = feature.geometry()
+                if not geom or geom.isEmpty():
+                    continue
+                    
+                # Check if this is a linestring
+                if geom.type() != QgsWkbTypes.LineGeometry:
+                    continue
+                    
+                # Get first and last vertices
+                vertices = []
+                for part in geom.asGeometryCollection() if geom.isMultipart() else [geom]:
+                    if part.type() == QgsWkbTypes.LineGeometry:
+                        line = part.asPolyline() if not part.isMultipart() else part.asMultiLinestring()[0]
+                        if len(line) >= 2:
+                            vertices.extend([line[0], line[-1]])  # First and last points
+                
+                # Check if any vertex matches our point
+                for i, vertex in enumerate(vertices):
+                    distance = ((vertex.x() - map_pt.x()) ** 2 + (vertex.y() - map_pt.y()) ** 2) ** 0.5
+                    if distance <= tolerance:
+                        # Found a matching vertex - get corresponding depth
+                        if i % 2 == 0 and p1_h_idx >= 0:  # Even index = first vertex = p1
+                            depth_value = feature.attribute(p1_h_idx)
+                        elif i % 2 == 1 and p2_h_idx >= 0:  # Odd index = last vertex = p2  
+                            depth_value = feature.attribute(p2_h_idx)
+                        else:
+                            continue
+                            
+                        if depth_value is not None and depth_value != '':
+                            try:
+                                depth_float = float(depth_value)
+                                print(f"[SEWERAGE DEBUG] Found existing depth {depth_float:.3f}m at vertex {i//2 + 1} of feature {feature.id()}")
+                                return depth_float
+                            except (ValueError, TypeError):
+                                continue
+                                
+        except Exception as e:
+            print(f"[SEWERAGE DEBUG] Error searching for existing depth: {e}")
+            
+        return None
 
     # Event filter to catch clicks without stealing the active tool
     def eventFilter(self, obj, ev):
@@ -539,8 +626,21 @@ class ElevationFloaterController(QtCore.QObject):
             # First click: set upstream point and upstream bottom by rule
             self._upstream_map_point = QgsPointXY(map_pt)
             self._upstream_ground_elev = float(elev) if elev is not None else None
-            if self.initial_depth_m > 0.0:
-                upstream_bottom = (self._upstream_ground_elev if self._upstream_ground_elev is not None else 0.0) - float(self.initial_depth_m)
+            
+            # Check for existing depth at this coordinate (with preference over initial_depth_m)
+            existing_depth = self._find_existing_depth_at_point(map_pt)
+            effective_initial_depth = self.initial_depth_m
+            
+            if existing_depth is not None:
+                # Use existing depth instead of initial_depth_m parameter
+                effective_initial_depth = existing_depth
+                self._inherited_depth = existing_depth
+                print(f"[SEWERAGE DEBUG] Using existing depth {existing_depth:.3f}m instead of initial depth {self.initial_depth_m:.3f}m")
+            else:
+                self._inherited_depth = None
+            
+            if effective_initial_depth > 0.0:
+                upstream_bottom = (self._upstream_ground_elev if self._upstream_ground_elev is not None else 0.0) - float(effective_initial_depth)
             else:
                 # Minimum cover + diameter (use integer math to avoid floating-point precision issues)
                 if self._upstream_ground_elev is not None:
@@ -607,6 +707,7 @@ class ElevationFloaterController(QtCore.QObject):
         self._upstream_map_point = None
         self._upstream_ground_elev = None
         self._upstream_bottom_elev = None
+        self._inherited_depth = None
         # DON'T clear stored clicks here - let red_basica workflow complete first
         print("[SEWERAGE DEBUG] Reset sequence (right-click) but keeping stored clicks for red_basica workflow")
 
