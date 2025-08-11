@@ -866,6 +866,8 @@ class SewerageDepthEstimatorDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
     def _on_recalculate_selected(self):
         """Recalculate depths for selected segments"""
         try:
+            print("[SEWERAGE DEBUG] Starting recalculation of selected segments...")
+            
             layer = self._current_line_layer()
             if not layer:
                 if self.iface:
@@ -878,11 +880,15 @@ class SewerageDepthEstimatorDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                     self.iface.messageBar().pushWarning("Sewerage Depth Estimator", "No features selected")
                 return
 
+            print(f"[SEWERAGE DEBUG] Processing {len(selected_features)} selected features")
+
             # Get current parameters
             min_cover = self.spnMinCover.value() if hasattr(self, 'spnMinCover') else 0.9
             diameter = self.spnDiameter.value() / 1000.0 if hasattr(self, 'spnDiameter') else 0.15  # Convert mm to m
             slope = self.spnSlope.value() if hasattr(self, 'spnSlope') else 0.005
             initial_depth = self.spnInitialDepth.value() if hasattr(self, 'spnInitialDepth') else 0.0
+
+            print(f"[SEWERAGE DEBUG] Parameters - min_cover: {min_cover}m, diameter: {diameter}m, slope: {slope}, initial_depth: {initial_depth}m")
 
             # Get DEM layer for elevation interpolation
             dem_layer = self._current_dem_layer()
@@ -890,6 +896,8 @@ class SewerageDepthEstimatorDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 if self.iface:
                     self.iface.messageBar().pushWarning("Sewerage Depth Estimator", "No DEM layer selected")
                 return
+
+            print(f"[SEWERAGE DEBUG] Using DEM layer: {dem_layer.name()}")
 
             # Start editing if needed
             if not layer.isEditable():
@@ -915,12 +923,16 @@ class SewerageDepthEstimatorDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         from .elevation_floater import RasterInterpolator
         from qgis.core import QgsCoordinateTransform, QgsProject, QgsPointXY
         
+        print("[SEWERAGE DEBUG] Preparing selected features - clearing depths and interpolating elevations...")
+        
         # Get field indices
         field_mapping = self._get_field_mapping(layer)
         p1_elev_idx = field_mapping.get('p1_elev', -1)
         p2_elev_idx = field_mapping.get('p2_elev', -1)
         p1_h_idx = field_mapping.get('p1_h', -1)
         p2_h_idx = field_mapping.get('p2_h', -1)
+
+        print(f"[SEWERAGE DEBUG] Field mapping: p1_elev={p1_elev_idx}, p2_elev={p2_elev_idx}, p1_h={p1_h_idx}, p2_h={p2_h_idx}")
 
         # Setup raster interpolator
         interpolator = RasterInterpolator(dem_layer, band=1)
@@ -929,29 +941,37 @@ class SewerageDepthEstimatorDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
 
         for feature in selected_features:
             try:
+                print(f"[SEWERAGE DEBUG] Processing feature ID {feature.id()}")
+                
                 # Clear existing depths
                 if p1_h_idx >= 0:
                     layer.changeAttributeValue(feature.id(), p1_h_idx, None)
+                    print(f"[SEWERAGE DEBUG]   Cleared p1_h for feature {feature.id()}")
                 if p2_h_idx >= 0:
                     layer.changeAttributeValue(feature.id(), p2_h_idx, None)
+                    print(f"[SEWERAGE DEBUG]   Cleared p2_h for feature {feature.id()}")
 
                 # Get geometry endpoints
                 geom = feature.geometry()
                 if geom.isEmpty():
+                    print(f"[SEWERAGE DEBUG]   Feature {feature.id()} has empty geometry, skipping")
                     continue
                 
                 if geom.isMultipart():
                     lines = geom.asMultiPolyline()
                     if not lines:
+                        print(f"[SEWERAGE DEBUG]   Feature {feature.id()} has no lines, skipping")
                         continue
                     pts = lines[0]
                 else:
                     pts = geom.asPolyline()
                 
                 if len(pts) < 2:
+                    print(f"[SEWERAGE DEBUG]   Feature {feature.id()} has less than 2 points, skipping")
                     continue
 
                 p1, p2 = QgsPointXY(pts[0]), QgsPointXY(pts[-1])
+                print(f"[SEWERAGE DEBUG]   Feature {feature.id()} endpoints: P1({p1.x():.2f}, {p1.y():.2f}) -> P2({p2.x():.2f}, {p2.y():.2f})")
 
                 # Interpolate missing elevations
                 if p1_elev_idx >= 0:
@@ -962,8 +982,13 @@ class SewerageDepthEstimatorDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                             elev = interpolator.bilinear(p1_raster)
                             if elev is not None:
                                 layer.changeAttributeValue(feature.id(), p1_elev_idx, round(float(elev), 2))
-                        except:
-                            pass
+                                print(f"[SEWERAGE DEBUG]   Interpolated P1 elevation: {round(float(elev), 2)}m")
+                            else:
+                                print(f"[SEWERAGE DEBUG]   Failed to interpolate P1 elevation")
+                        except Exception as ex:
+                            print(f"[SEWERAGE DEBUG]   Error interpolating P1 elevation: {ex}")
+                    else:
+                        print(f"[SEWERAGE DEBUG]   P1 elevation already exists: {p1_elev}m")
 
                 if p2_elev_idx >= 0:
                     p2_elev = feature.attribute(p2_elev_idx)
@@ -973,8 +998,13 @@ class SewerageDepthEstimatorDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                             elev = interpolator.bilinear(p2_raster)
                             if elev is not None:
                                 layer.changeAttributeValue(feature.id(), p2_elev_idx, round(float(elev), 2))
-                        except:
-                            pass
+                                print(f"[SEWERAGE DEBUG]   Interpolated P2 elevation: {round(float(elev), 2)}m")
+                            else:
+                                print(f"[SEWERAGE DEBUG]   Failed to interpolate P2 elevation")
+                        except Exception as ex:
+                            print(f"[SEWERAGE DEBUG]   Error interpolating P2 elevation: {ex}")
+                    else:
+                        print(f"[SEWERAGE DEBUG]   P2 elevation already exists: {p2_elev}m")
 
             except Exception as e:
                 print(f"[SEWERAGE DEBUG] Error preparing feature {feature.id()}: {e}")
@@ -982,6 +1012,8 @@ class SewerageDepthEstimatorDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
     def _calculate_tree_depths(self, selected_features, layer, min_cover, diameter, slope, initial_depth):
         """Calculate depths using tree traversal algorithm for open sewerage networks"""
         from qgis.core import QgsPointXY
+        
+        print("[SEWERAGE DEBUG] Starting tree depth calculation...")
         
         # Get field indices
         field_mapping = self._get_field_mapping(layer)
@@ -1000,21 +1032,26 @@ class SewerageDepthEstimatorDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         def node_key(pt: QgsPointXY) -> str:
             return f"{pt.x():.6f},{pt.y():.6f}"
 
+        print("[SEWERAGE DEBUG] Building network topology...")
+
         # Extract segments and build topology
         for i, feature in enumerate(selected_features):
             geom = feature.geometry()
             if geom.isEmpty():
+                print(f"[SEWERAGE DEBUG]   Skipping feature {feature.id()}: empty geometry")
                 continue
                 
             if geom.isMultipart():
                 lines = geom.asMultiPolyline()
                 if not lines:
+                    print(f"[SEWERAGE DEBUG]   Skipping feature {feature.id()}: no lines")
                     continue
                 pts = lines[0]
             else:
                 pts = geom.asPolyline()
             
             if len(pts) < 2:
+                print(f"[SEWERAGE DEBUG]   Skipping feature {feature.id()}: less than 2 points")
                 continue
 
             p1, p2 = QgsPointXY(pts[0]), QgsPointXY(pts[-1])
@@ -1027,13 +1064,17 @@ class SewerageDepthEstimatorDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 p1_elev = float(p1_elev) if p1_elev not in (None, '') else None
                 p2_elev = float(p2_elev) if p2_elev not in (None, '') else None
             except:
+                print(f"[SEWERAGE DEBUG]   Skipping feature {feature.id()}: invalid elevation values")
                 continue
 
             if p1_elev is None or p2_elev is None:
+                print(f"[SEWERAGE DEBUG]   Skipping feature {feature.id()}: missing elevations (p1={p1_elev}, p2={p2_elev})")
                 continue
 
             # Calculate segment length
             seg_length = ((p2.x() - p1.x()) ** 2 + (p2.y() - p1.y()) ** 2) ** 0.5
+
+            print(f"[SEWERAGE DEBUG]   Added segment {i}: Feature {feature.id()}, length={seg_length:.2f}m, elevations: P1={p1_elev}m, P2={p2_elev}m")
 
             segment_data = {
                 'feature': feature,
@@ -1060,11 +1101,13 @@ class SewerageDepthEstimatorDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             has_upstream = any(not is_upstream for _, is_upstream in node_connections.get(p1_key, []))
             if not has_upstream:
                 roots.append(i)
+                print(f"[SEWERAGE DEBUG]   Root segment {i}: Feature {seg['feature'].id()}")
 
         print(f"[SEWERAGE DEBUG] Found {len(roots)} root segments from {len(segments)} total")
 
         # Process each tree starting from roots
         for root_idx in roots:
+            print(f"[SEWERAGE DEBUG] Processing tree starting from root segment {root_idx}")
             self._process_tree_branch(root_idx, segments, node_connections, layer, 
                                     min_cover, diameter, slope, initial_depth,
                                     p1_h_idx, p2_h_idx)
@@ -1078,11 +1121,16 @@ class SewerageDepthEstimatorDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
 
         stack = [(seg_idx, initial_depth if initial_depth > 0 else None)]
         
+        print(f"[SEWERAGE DEBUG]   Starting branch processing with initial_depth={initial_depth}")
+        
         while stack:
             current_idx, upstream_depth = stack.pop()
             segment = segments[current_idx]
             
+            print(f"[SEWERAGE DEBUG]   Processing segment {current_idx} (Feature {segment['feature'].id()}) with upstream_depth={upstream_depth}")
+            
             if segment['processed']:
+                print(f"[SEWERAGE DEBUG]     Skipping already processed segment {current_idx}")
                 continue
                 
             segment['processed'] = True
@@ -1092,6 +1140,9 @@ class SewerageDepthEstimatorDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 # Use minimum cover + diameter
                 total_depth = min_cover + diameter
                 upstream_depth = total_depth
+                print(f"[SEWERAGE DEBUG]     Calculated initial upstream depth: {upstream_depth:.2f}m (min_cover={min_cover} + diameter={diameter})")
+            else:
+                print(f"[SEWERAGE DEBUG]     Using provided upstream depth: {upstream_depth:.2f}m")
             
             # Calculate downstream depth considering slope and minimum cover
             fall = segment['length'] * slope
@@ -1101,21 +1152,30 @@ class SewerageDepthEstimatorDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             min_downstream = min_cover + diameter
             downstream_depth = max(downstream_candidate, min_downstream)
             
+            print(f"[SEWERAGE DEBUG]     Calculations: length={segment['length']:.2f}m, slope={slope}, fall={fall:.3f}m")
+            print(f"[SEWERAGE DEBUG]     Downstream candidate: {downstream_candidate:.2f}m, min_required: {min_downstream:.2f}m")
+            print(f"[SEWERAGE DEBUG]     Final downstream depth: {downstream_depth:.2f}m")
+            
             # Write depths to feature
             feature = segment['feature']
             layer.changeAttributeValue(feature.id(), p1_h_idx, round(upstream_depth, 2))
             layer.changeAttributeValue(feature.id(), p2_h_idx, round(downstream_depth, 2))
             
-            print(f"[SEWERAGE DEBUG] Segment {feature.id()}: upstream={upstream_depth:.2f}m, downstream={downstream_depth:.2f}m")
+            print(f"[SEWERAGE DEBUG]     Written to Feature {feature.id()}: P1_H={round(upstream_depth, 2)}m, P2_H={round(downstream_depth, 2)}m")
             
             # Find downstream segments
             p2_key = node_key(segment['p2'])
             downstream_segments = [idx for idx, is_upstream in node_connections.get(p2_key, []) if is_upstream]
             
+            print(f"[SEWERAGE DEBUG]     Found {len(downstream_segments)} downstream segments: {downstream_segments}")
+            
             # Add downstream segments to stack
             for ds_idx in downstream_segments:
                 if not segments[ds_idx]['processed']:
+                    print(f"[SEWERAGE DEBUG]     Adding downstream segment {ds_idx} to stack with depth {downstream_depth:.2f}m")
                     stack.append((ds_idx, downstream_depth))
+                else:
+                    print(f"[SEWERAGE DEBUG]     Downstream segment {ds_idx} already processed, skipping")
 
     def _get_field_mapping(self, layer):
         """Get field mapping for the given layer"""
