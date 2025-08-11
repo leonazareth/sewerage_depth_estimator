@@ -455,8 +455,8 @@ class ElevationFloaterController(QtCore.QObject):
             else:
                 # Before first click: show depth from snap match if available
                 if self._current_snap_depth is not None:
-                    # Use HTML formatting to make inherited depth red
-                    lines.append(f'<span style="color: red;">depth={self._current_snap_depth:.2f} (from existing)</span>')
+                    # Use simple HTML formatting that Qt definitely supports
+                    lines.append(f'<font color="red">depth={self._current_snap_depth:.2f}</font>')
         if not lines:
             # Default to elevation text if nothing selected
             return self._nodata_text if elev is None else self._format.format(value=float(elev))
@@ -468,6 +468,9 @@ class ElevationFloaterController(QtCore.QObject):
         if self._bold_labels:
             def bold_label(line: str) -> str:
                 try:
+                    # Skip HTML formatting for lines that already contain HTML tags
+                    if '<' in line and '>' in line:
+                        return line
                     key, val = line.split("=", 1)
                     return f"<b>{key}</b>={val}"
                 except Exception:
