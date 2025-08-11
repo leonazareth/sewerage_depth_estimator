@@ -265,6 +265,9 @@ class ElevationFloaterController(QtCore.QObject):
         self._upstream_bottom_elev: Optional[float] = None
         # Track when we inherit depth from existing segment
         self._inherited_depth: Optional[float] = None
+        # Cache for hover depth lookup to avoid repeated searches
+        self._hover_depth_cache = {}
+        self._last_hover_point = None
         # Optional dedicated measure CRS
         self._measure_crs: Optional[QgsCoordinateReferenceSystem] = None
         # Style
@@ -318,6 +321,8 @@ class ElevationFloaterController(QtCore.QObject):
             # Install low-level event filter for press events on viewport
             self.canvas.viewport().installEventFilter(self)
             self._connected = True
+            # Clear hover cache when starting new session
+            self._hover_depth_cache = {}
 
     def stop(self):
         if not self.canvas:
@@ -407,30 +412,56 @@ class ElevationFloaterController(QtCore.QObject):
                 lines.append(f"elev={self._nodata_text}")
             else:
                 lines.append(f"elev={float(elev):.2f}")
-        # Depth preview
-        if self.show_depth and self._have_upstream and self._upstream_bottom_elev is not None:
-            try:
-                dist = self._distance_m(self._upstream_map_point, map_pt)
-                downstream_candidate = self._upstream_bottom_elev - dist * max(0.0, float(self.slope_m_per_m))
-                # If current elev known, enforce minimum cover
-                if elev is not None:
-                    # Use integer math to avoid floating-point precision issues
-                    min_cover_mm = int(round(float(self.minimum_cover_m) * 1000))
-                    diameter_mm = int(round(float(self.diameter_m) * 1000))
-                    total_depth = (min_cover_mm + diameter_mm) / 1000.0
-                    min_bottom = float(elev) - total_depth
-                    downstream_bottom = min(downstream_candidate, min_bottom)
-                    depth_val = float(elev) - downstream_bottom
-                else:
-                    depth_val = float('nan')
-                
-                # Show if this is first point and depth was inherited
-                if dist < 0.01 and self._inherited_depth is not None:  # Within 1cm = first click
-                    lines.append(f"depth={depth_val:.2f} (inherited)")
-                else:
-                    lines.append(f"depth={depth_val:.2f}")
-            except Exception:
-                pass
+        
+        # Depth preview - different logic for before vs after first click
+        if self.show_depth:
+            if self._have_upstream and self._upstream_bottom_elev is not None:
+                # Normal depth calculation when we have upstream point
+                try:
+                    dist = self._distance_m(self._upstream_map_point, map_pt)
+                    downstream_candidate = self._upstream_bottom_elev - dist * max(0.0, float(self.slope_m_per_m))
+                    # If current elev known, enforce minimum cover
+                    if elev is not None:
+                        # Use integer math to avoid floating-point precision issues
+                        min_cover_mm = int(round(float(self.minimum_cover_m) * 1000))
+                        diameter_mm = int(round(float(self.diameter_m) * 1000))
+                        total_depth = (min_cover_mm + diameter_mm) / 1000.0
+                        min_bottom = float(elev) - total_depth
+                        downstream_bottom = min(downstream_candidate, min_bottom)
+                        depth_val = float(elev) - downstream_bottom
+                    else:
+                        depth_val = float('nan')
+                    
+                    # Show if this is first point and depth was inherited
+                    if dist < 0.01 and self._inherited_depth is not None:  # Within 1cm = first click
+                        lines.append(f"depth={depth_val:.2f} (inherited)")
+                    else:
+                        lines.append(f"depth={depth_val:.2f}")
+                except Exception:
+                    pass
+            else:
+                # Before first click: check for existing depth at hover location
+                try:
+                    # Use simple caching to avoid repeated expensive searches
+                    cache_key = f"{map_pt.x():.4f},{map_pt.y():.4f}"  # Round to 0.1mm precision
+                    
+                    if cache_key not in self._hover_depth_cache:
+                        existing_depth = self._find_existing_depth_at_point(map_pt)
+                        self._hover_depth_cache[cache_key] = existing_depth
+                        # Limit cache size to avoid memory issues
+                        if len(self._hover_depth_cache) > 100:
+                            # Remove oldest entries (simple strategy)
+                            keys_to_remove = list(self._hover_depth_cache.keys())[:50]
+                            for k in keys_to_remove:
+                                del self._hover_depth_cache[k]
+                    else:
+                        existing_depth = self._hover_depth_cache[cache_key]
+                    
+                    if existing_depth is not None:
+                        # Use HTML formatting to make inherited depth red
+                        lines.append(f'<span style="color: red;">depth={existing_depth:.2f} (from existing)</span>')
+                except Exception:
+                    pass
         if not lines:
             # Default to elevation text if nothing selected
             return self._nodata_text if elev is None else self._format.format(value=float(elev))
@@ -708,6 +739,8 @@ class ElevationFloaterController(QtCore.QObject):
         self._upstream_ground_elev = None
         self._upstream_bottom_elev = None
         self._inherited_depth = None
+        # Clear hover cache when resetting
+        self._hover_depth_cache = {}
         # DON'T clear stored clicks here - let red_basica workflow complete first
         print("[SEWERAGE DEBUG] Reset sequence (right-click) but keeping stored clicks for red_basica workflow")
 
