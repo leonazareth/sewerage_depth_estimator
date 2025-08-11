@@ -236,6 +236,8 @@ class ElevationFloaterController(QtCore.QObject):
         super().__init__(iface.mainWindow() if iface else None)
         self.iface = iface
         self.canvas = self.iface.mapCanvas() if self.iface else None
+        # Snap utilities for getting snapped coordinates
+        self.snapper = self.canvas.snappingUtils() if self.canvas else None
         self._floater: Optional[_FloaterWidget] = None
         self._watcher: Optional[_CanvasInOutWatcher] = None
         self._interp: Optional[RasterInterpolator] = None
@@ -307,7 +309,7 @@ class ElevationFloaterController(QtCore.QObject):
             self.canvas.viewport().installEventFilter(self._watcher)
 
         if not self._connected:
-            self.canvas.xyCoordinates.connect(self._on_xy)
+            self.canvas.xyCoordinates.connect(self._on_xy_raw)
             # Install low-level event filter for press events on viewport
             self.canvas.viewport().installEventFilter(self)
             self._connected = True
@@ -317,7 +319,7 @@ class ElevationFloaterController(QtCore.QObject):
             return
         if self._connected:
             try:
-                self.canvas.xyCoordinates.disconnect(self._on_xy)
+                self.canvas.xyCoordinates.disconnect(self._on_xy_raw)
             except Exception:
                 pass
             self._connected = False
@@ -341,6 +343,19 @@ class ElevationFloaterController(QtCore.QObject):
             self._floater.hide()
 
     # ------------------------------------------------------------------
+    def _on_xy_raw(self, map_pt: QgsPointXY):
+        """Handle raw xyCoordinates signal and check for snapped coordinates"""
+        try:
+            # Convert map coordinates back to screen coordinates to check for snapping
+            screen_pt = self.canvas.getCoordinateTransform().transform(map_pt)
+            screen_pos = QtCore.QPoint(int(screen_pt.x()), int(screen_pt.y()))
+            # Get snapped coordinates if available
+            snapped_pt = self._get_snapped_or_raw_point(screen_pos)
+            self._on_xy(snapped_pt)
+        except Exception:
+            # Fallback to original coordinates
+            self._on_xy(map_pt)
+
     def _on_xy(self, map_pt: QgsPointXY):
         # Guard against removed raster providers
         if not self._interp or not self._to_raster or not self._floater:
@@ -448,6 +463,21 @@ class ElevationFloaterController(QtCore.QObject):
         dy = b.y() - a.y()
         return (dx * dx + dy * dy) ** 0.5
 
+    def _get_snapped_or_raw_point(self, screen_pos):
+        """Get snapped coordinates if available, otherwise raw coordinates"""
+        try:
+            if self.snapper:
+                snap_match = self.snapper.snapToMap(screen_pos)
+                if snap_match.isValid():
+                    # Return snapped point coordinates
+                    return snap_match.point()
+            
+            # Fallback to raw coordinates
+            return self.canvas.getCoordinateTransform().toMapCoordinates(screen_pos.x(), screen_pos.y())
+        except Exception:
+            # Emergency fallback
+            return self.canvas.getCoordinateTransform().toMapCoordinates(screen_pos.x(), screen_pos.y())
+
     # Event filter to catch clicks without stealing the active tool
     def eventFilter(self, obj, ev):
         if self.canvas and obj is self.canvas.viewport():
@@ -455,7 +485,8 @@ class ElevationFloaterController(QtCore.QObject):
             if t == QtCore.QEvent.MouseButtonPress:
                 btn = ev.button()
                 pos = ev.pos()
-                map_pt = self.canvas.getCoordinateTransform().toMapCoordinates(pos.x(), pos.y())
+                # Use snapped coordinates if available, otherwise raw coordinates
+                map_pt = self._get_snapped_or_raw_point(pos)
                 # Gate check
                 if not self._passes_gate():
                     return super().eventFilter(obj, ev)
