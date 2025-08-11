@@ -57,6 +57,8 @@ class _FloaterWidget(QtWidgets.QWidget):
         font.setFamily(LABEL_FONT_FAMILY if fam_ok else LABEL_FONT_FALLBACK)
         font.setPointSize(LABEL_FONT_SIZE_PT)
         self.label.setFont(font)
+        # Enable rich text formatting for HTML content
+        self.label.setTextFormat(Qt.RichText)
         self._text_color = QtGui.QColor(34, 34, 34)
         self._bg_color = QtGui.QColor(*BUBBLE_BG_RGBA)
         self.label.setStyleSheet("QLabel { color: #222; }")
@@ -265,9 +267,8 @@ class ElevationFloaterController(QtCore.QObject):
         self._upstream_bottom_elev: Optional[float] = None
         # Track when we inherit depth from existing segment
         self._inherited_depth: Optional[float] = None
-        # Cache for hover depth lookup to avoid repeated searches
-        self._hover_depth_cache = {}
-        self._last_hover_point = None
+        # Track depth from current snap match (for hover preview)
+        self._current_snap_depth: Optional[float] = None
         # Optional dedicated measure CRS
         self._measure_crs: Optional[QgsCoordinateReferenceSystem] = None
         # Style
@@ -321,8 +322,6 @@ class ElevationFloaterController(QtCore.QObject):
             # Install low-level event filter for press events on viewport
             self.canvas.viewport().installEventFilter(self)
             self._connected = True
-            # Clear hover cache when starting new session
-            self._hover_depth_cache = {}
 
     def stop(self):
         if not self.canvas:
@@ -359,11 +358,25 @@ class ElevationFloaterController(QtCore.QObject):
             # Convert map coordinates back to screen coordinates to check for snapping
             screen_pt = self.canvas.getCoordinateTransform().transform(map_pt)
             screen_pos = QtCore.QPoint(int(screen_pt.x()), int(screen_pt.y()))
-            # Get snapped coordinates if available
-            snapped_pt = self._get_snapped_or_raw_point(screen_pos)
+            
+            # Check if snapping occurred and get snap results
+            snapped_pt = map_pt  # Default to original
+            snap_depth = None
+            
+            if self.snapper:
+                snap_match = self.snapper.snapToMap(screen_pos)
+                if snap_match.isValid():
+                    snapped_pt = snap_match.point()
+                    # If we snapped to a vertex, get the depth from that feature
+                    if not self._have_upstream:  # Only before first click
+                        snap_depth = self._get_depth_from_snap_match(snap_match)
+            
+            # Store snap depth for use in _compose_text
+            self._current_snap_depth = snap_depth
             self._on_xy(snapped_pt)
         except Exception:
             # Fallback to original coordinates
+            self._current_snap_depth = None
             self._on_xy(map_pt)
 
     def _on_xy(self, map_pt: QgsPointXY):
@@ -440,28 +453,10 @@ class ElevationFloaterController(QtCore.QObject):
                 except Exception:
                     pass
             else:
-                # Before first click: check for existing depth at hover location
-                try:
-                    # Use simple caching to avoid repeated expensive searches
-                    cache_key = f"{map_pt.x():.4f},{map_pt.y():.4f}"  # Round to 0.1mm precision
-                    
-                    if cache_key not in self._hover_depth_cache:
-                        existing_depth = self._find_existing_depth_at_point(map_pt)
-                        self._hover_depth_cache[cache_key] = existing_depth
-                        # Limit cache size to avoid memory issues
-                        if len(self._hover_depth_cache) > 100:
-                            # Remove oldest entries (simple strategy)
-                            keys_to_remove = list(self._hover_depth_cache.keys())[:50]
-                            for k in keys_to_remove:
-                                del self._hover_depth_cache[k]
-                    else:
-                        existing_depth = self._hover_depth_cache[cache_key]
-                    
-                    if existing_depth is not None:
-                        # Use HTML formatting to make inherited depth red
-                        lines.append(f'<span style="color: red;">depth={existing_depth:.2f} (from existing)</span>')
-                except Exception:
-                    pass
+                # Before first click: show depth from snap match if available
+                if self._current_snap_depth is not None:
+                    # Use HTML formatting to make inherited depth red
+                    lines.append(f'<span style="color: red;">depth={self._current_snap_depth:.2f} (from existing)</span>')
         if not lines:
             # Default to elevation text if nothing selected
             return self._nodata_text if elev is None else self._format.format(value=float(elev))
@@ -593,6 +588,55 @@ class ElevationFloaterController(QtCore.QObject):
                                 
         except Exception as e:
             print(f"[SEWERAGE DEBUG] Error searching for existing depth: {e}")
+            
+        return None
+
+    def _get_depth_from_snap_match(self, snap_match):
+        """Extract depth value from a snap match result"""
+        try:
+            # Get the feature and vertex index from snap match
+            if hasattr(snap_match, 'layer') and hasattr(snap_match, 'featureId'):
+                layer = snap_match.layer()
+                if layer != self._current_layer:
+                    return None  # Only check our current layer
+                    
+                feature_id = snap_match.featureId()
+                vertex_index = getattr(snap_match, 'vertexIndex', lambda: -1)()
+                
+                # Get the feature
+                feature = layer.getFeature(feature_id)
+                if not feature.isValid():
+                    return None
+                
+                # Get field mappings
+                field_mapping = self._get_field_mapping()
+                p1_h_idx = field_mapping.get('p1_h', -1)
+                p2_h_idx = field_mapping.get('p2_h', -1)
+                
+                # Determine if this is start (p1) or end (p2) vertex
+                geom = feature.geometry()
+                if geom and not geom.isEmpty():
+                    if geom.type() == QgsWkbTypes.LineGeometry:
+                        # For linestring, vertex 0 = p1, last vertex = p2
+                        vertex_count = geom.constGet().numPoints() if hasattr(geom.constGet(), 'numPoints') else 0
+                        
+                        if vertex_index == 0 and p1_h_idx >= 0:
+                            # First vertex = p1
+                            depth_value = feature.attribute(p1_h_idx)
+                        elif vertex_index == vertex_count - 1 and p2_h_idx >= 0:
+                            # Last vertex = p2
+                            depth_value = feature.attribute(p2_h_idx)
+                        else:
+                            return None  # Middle vertex, no depth info
+                        
+                        if depth_value is not None and depth_value != '':
+                            try:
+                                return float(depth_value)
+                            except (ValueError, TypeError):
+                                pass
+                                
+        except Exception as e:
+            print(f"[SEWERAGE DEBUG] Error getting depth from snap match: {e}")
             
         return None
 
@@ -739,8 +783,7 @@ class ElevationFloaterController(QtCore.QObject):
         self._upstream_ground_elev = None
         self._upstream_bottom_elev = None
         self._inherited_depth = None
-        # Clear hover cache when resetting
-        self._hover_depth_cache = {}
+        self._current_snap_depth = None
         # DON'T clear stored clicks here - let red_basica workflow complete first
         print("[SEWERAGE DEBUG] Reset sequence (right-click) but keeping stored clicks for red_basica workflow")
 
