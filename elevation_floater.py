@@ -525,7 +525,7 @@ class ElevationFloaterController(QtCore.QObject):
             tolerance: Search tolerance in map units (default 1mm)
             
         Returns:
-            float or None: Existing depth value if found, None otherwise
+            float or None: Maximum existing depth value if any coincident endpoints are found, None otherwise
         """
         if not self._current_layer:
             return None
@@ -552,6 +552,7 @@ class ElevationFloaterController(QtCore.QObject):
             print(f"[SEWERAGE DEBUG] Searching for existing depth at {map_pt.x():.6f}, {map_pt.y():.6f}")
             print(f"[SEWERAGE DEBUG] Found {len(features)} features in search area")
             
+            max_depth: Optional[float] = None
             for feature in features:
                 geom = feature.geometry()
                 if not geom or geom.isEmpty():
@@ -584,15 +585,18 @@ class ElevationFloaterController(QtCore.QObject):
                         if depth_value is not None and depth_value != '':
                             try:
                                 depth_float = float(depth_value)
-                                print(f"[SEWERAGE DEBUG] Found existing depth {depth_float:.3f}m at vertex {i//2 + 1} of feature {feature.id()}")
-                                return depth_float
+                                print(f"[SEWERAGE DEBUG] Candidate depth {depth_float:.3f}m at vertex {i//2 + 1} of feature {feature.id()}")
+                                if max_depth is None or depth_float > max_depth:
+                                    max_depth = depth_float
                             except (ValueError, TypeError):
                                 continue
                                 
         except Exception as e:
             print(f"[SEWERAGE DEBUG] Error searching for existing depth: {e}")
             
-        return None
+        if max_depth is not None:
+            print(f"[SEWERAGE DEBUG] Selected maximum coincident depth: {max_depth:.3f}m")
+        return max_depth
 
     def _get_depth_from_snap_match(self, snap_match):
         """Extract depth value from a snap match result"""
