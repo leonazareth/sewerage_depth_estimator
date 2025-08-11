@@ -26,7 +26,7 @@ import os
 
 from qgis.PyQt import QtGui, QtWidgets, uic
 from qgis.PyQt.QtCore import pyqtSignal
-from qgis.core import QgsProject, QgsMapLayer, QgsCoordinateReferenceSystem
+from qgis.core import QgsProject, QgsMapLayer, QgsCoordinateReferenceSystem, QgsPointXY
 try:
     from qgis.gui import QgsProjectionSelectionWidget
 except Exception:  # pragma: no cover - optional in some envs
@@ -418,6 +418,184 @@ class SewerageDepthEstimatorDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         except Exception:
             if hasattr(self, 'btnRecalcSelected'):
                 self.btnRecalcSelected.setEnabled(False)
+
+    def _on_recalc_selected(self):
+        lyr = self._current_line_layer()
+        if lyr is None or not self._floater:
+            return
+        # Ensure latest params
+        self._push_params_to_floater()
+        try:
+            sel_fids = lyr.selectedFeatureIds()
+            if not sel_fids:
+                return
+            # Resolve field indices
+            p1e = self._resolve_field_index(lyr, 'cmbP1Elev', 'p1_elev')
+            p2e = self._resolve_field_index(lyr, 'cmbP2Elev', 'p2_elev')
+            p1h = self._resolve_field_index(lyr, 'cmbP1H', 'p1_h')
+            p2h = self._resolve_field_index(lyr, 'cmbP2H', 'p2_h')
+            if min(p1e, p2e, p1h, p2h) < 0:
+                if self.iface:
+                    self.iface.messageBar().pushWarning(self.tr("Sewerage Depth Estimator"), self.tr("Configure p1/p2 fields before recalculation."))
+                return
+            if not lyr.isEditable():
+                lyr.startEditing()
+
+            # Clear existing depths
+            for fid in sel_fids:
+                try:
+                    lyr.changeAttributeValue(fid, p1h, None)
+                    lyr.changeAttributeValue(fid, p2h, None)
+                except Exception:
+                    pass
+
+            # Ensure DEM and floater are ready for interpolation
+            dem = self._current_dem_layer() or self._pick_first_raster_layer()
+            if dem is None:
+                if self.iface:
+                    self.iface.messageBar().pushWarning(self.tr("Sewerage Depth Estimator"), self.tr("No DEM set for elevation interpolation."))
+                return
+            try:
+                self._floater.start(dem, band=1, number_format="{value:.2f}")
+            except Exception:
+                pass
+
+            # Collect features and coordinates
+            features = {f.id(): f for f in lyr.getFeatures(sel_fids)}
+            coords_by_fid = {}
+            for fid, f in features.items():
+                try:
+                    g = f.geometry()
+                    if not g or g.isEmpty():
+                        continue
+                    if g.isMultipart():
+                        lines = g.asMultiPolyline()
+                        pts = lines[0] if lines else []
+                    else:
+                        pts = g.asPolyline()
+                    if len(pts) < 2:
+                        continue
+                    coords_by_fid[fid] = (QgsPointXY(pts[0]), QgsPointXY(pts[-1]))
+                except Exception:
+                    continue
+
+            # Interpolate missing elevations
+            for fid, f in features.items():
+                try:
+                    if fid not in coords_by_fid:
+                        continue
+                    p1pt, p2pt = coords_by_fid[fid]
+                    # p1 elev
+                    if f.attribute(p1e) in (None, '') and self._floater and self._floater._interp:
+                        lyr_pt = self._floater._to_raster.transform(QgsPointXY(p1pt)) if self._floater._to_raster else None
+                        elev = self._floater._interp.bilinear(lyr_pt) if lyr_pt else None
+                        if elev is not None:
+                            lyr.changeAttributeValue(fid, p1e, round(float(elev), 2))
+                    # p2 elev
+                    if f.attribute(p2e) in (None, '') and self._floater and self._floater._interp:
+                        lyr_pt = self._floater._to_raster.transform(QgsPointXY(p2pt)) if self._floater._to_raster else None
+                        elev = self._floater._interp.bilinear(lyr_pt) if lyr_pt else None
+                        if elev is not None:
+                            lyr.changeAttributeValue(fid, p2e, round(float(elev), 2))
+                except Exception:
+                    continue
+
+            # Build selected subgraph indices
+            def key(pt: QgsPointXY) -> str:
+                return f"{pt.x():.6f},{pt.y():.6f}"
+            p2_to_feats, p1_from_feats = {}, {}
+            for fid, (p1pt, p2pt) in coords_by_fid.items():
+                p2_to_feats.setdefault(key(p2pt), []).append(fid)
+                p1_from_feats.setdefault(key(p1pt), []).append(fid)
+
+            # Roots (no selected upstream)
+            roots = [fid for fid, (p1pt, _) in coords_by_fid.items() if key(p1pt) not in p2_to_feats]
+
+            # Parameters
+            min_cover_m = float(self.spnMinCover.value()) if hasattr(self, 'spnMinCover') else 0.9
+            diameter_m = (float(self.spnDiameter.value())/1000.0) if hasattr(self, 'spnDiameter') else 0.150
+            slope = float(self.spnSlope.value()) if hasattr(self, 'spnSlope') else 0.005
+            init_depth = float(self.spnInitialDepth.value()) if hasattr(self, 'spnInitialDepth') else 0.0
+
+            def enforce_min_cover(ground_elev: float, proposed_bottom: float) -> float:
+                min_bottom = ground_elev - (min_cover_m + diameter_m)
+                return min(proposed_bottom, min_bottom)
+
+            # Traverse
+            visited = set()
+            for root in roots:
+                try:
+                    if root not in features or root not in coords_by_fid:
+                        continue
+                    f = features[root]
+                    p1pt, p2pt = coords_by_fid[root]
+                    ge1 = f.attribute(p1e); ge2 = f.attribute(p2e)
+                    ge1 = float(ge1) if ge1 not in (None, '') else None
+                    ge2 = float(ge2) if ge2 not in (None, '') else None
+                    if ge1 is None:
+                        continue
+                    p1_depth = init_depth if init_depth > 0 else (min_cover_m + diameter_m)
+                    lyr.changeAttributeValue(root, p1h, round(float(p1_depth), 2))
+                    seg_len = self._floater._distance_m(p1pt, p2pt)
+                    upstream_bottom = ge1 - p1_depth
+                    downstream_bottom = upstream_bottom - seg_len * max(0.0, slope)
+                    if ge2 is not None:
+                        downstream_bottom = enforce_min_cover(ge2, downstream_bottom)
+                        p2_depth = ge2 - downstream_bottom
+                        lyr.changeAttributeValue(root, p2h, round(float(p2_depth), 2))
+                except Exception:
+                    pass
+
+                # DFS downstream
+                stack = [root]
+                while stack:
+                    cur = stack.pop()
+                    if cur in visited:
+                        continue
+                    visited.add(cur)
+                    try:
+                        _, cur_p2 = coords_by_fid[cur]
+                        for nid in p1_from_feats.get(key(cur_p2), []):
+                            if nid in visited or nid not in features or nid not in coords_by_fid:
+                                continue
+                            parent_f = features[cur]
+                            nid_f = features[nid]
+                            parent_p2_depth_val = parent_f.attribute(p2h)
+                            if parent_p2_depth_val in (None, ''):
+                                continue
+                            parent_p2_depth = float(parent_p2_depth_val)
+                            # set child's p1 depth
+                            lyr.changeAttributeValue(nid, p1h, round(parent_p2_depth, 2))
+                            # compute child's p2 depth
+                            p1pt, p2pt = coords_by_fid[nid]
+                            ge1 = nid_f.attribute(p1e); ge2 = nid_f.attribute(p2e)
+                            ge1 = float(ge1) if ge1 not in (None, '') else None
+                            ge2 = float(ge2) if ge2 not in (None, '') else None
+                            if ge1 is None:
+                                continue
+                            seg_len = self._floater._distance_m(p1pt, p2pt)
+                            upstream_bottom = ge1 - parent_p2_depth
+                            downstream_bottom = upstream_bottom - seg_len * max(0.0, slope)
+                            if ge2 is not None:
+                                downstream_bottom = enforce_min_cover(ge2, downstream_bottom)
+                                p2_depth = ge2 - downstream_bottom
+                                lyr.changeAttributeValue(nid, p2h, round(float(p2_depth), 2))
+                            stack.append(nid)
+                    except Exception:
+                        continue
+
+            try:
+                if self.iface:
+                    # QGIS stable APIs: use info as success indicator
+                    self.iface.messageBar().pushInfo(self.tr("Sewerage Depth Estimator"), self.tr("Recalculation complete."))
+            except Exception:
+                pass
+        except Exception:
+            try:
+                if self.iface:
+                    self.iface.messageBar().pushCritical(self.tr("Sewerage Depth Estimator"), self.tr("Recalculation failed."))
+            except Exception:
+                pass
 
     def _on_create_default_attrs(self):
         lyr = self._current_line_layer()
