@@ -83,6 +83,8 @@ class SewerageDepthEstimatorDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         if hasattr(self, 'cmbLineLayer'):
             self.cmbLineLayer.currentIndexChanged.connect(self._on_line_layer_changed)
             self._push_gate_layer_to_floater()
+            # Set up initial selection monitoring
+            self._connect_selection_monitoring()
         if hasattr(self, 'cmbDemLayer'):
             self.cmbDemLayer.currentIndexChanged.connect(self._on_dem_layer_changed)
         # No CRS selection widget; measure CRS will follow the vector layer
@@ -813,10 +815,13 @@ class SewerageDepthEstimatorDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
     def _connect_selection_monitoring(self):
         """Connect selection change monitoring for current line layer"""
         try:
+            print("[SEWERAGE DEBUG] Setting up selection monitoring...")
+            
             # Disconnect previous connections
             if hasattr(self, '_current_monitored_layer') and self._current_monitored_layer:
                 try:
                     self._current_monitored_layer.selectionChanged.disconnect(self._on_selection_changed)
+                    print(f"[SEWERAGE DEBUG] Disconnected from previous layer: {self._current_monitored_layer.name()}")
                 except:
                     pass
             
@@ -825,11 +830,13 @@ class SewerageDepthEstimatorDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             if layer:
                 layer.selectionChanged.connect(self._on_selection_changed)
                 self._current_monitored_layer = layer
+                print(f"[SEWERAGE DEBUG] Connected selection monitoring to layer: {layer.name()}")
                 # Update button state immediately
                 self._on_selection_changed()
             else:
                 self._current_monitored_layer = None
                 self._update_recalculate_button_state(False)
+                print("[SEWERAGE DEBUG] No line layer available for selection monitoring")
         except Exception as e:
             print(f"[SEWERAGE DEBUG] Error connecting selection monitoring: {e}")
 
@@ -837,8 +844,14 @@ class SewerageDepthEstimatorDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         """Update recalculate button state based on selection"""
         try:
             layer = self._current_line_layer()
-            has_selection = layer and len(layer.selectedFeatures()) > 0
-            self._update_recalculate_button_state(has_selection)
+            if layer:
+                selected_count = len(layer.selectedFeatures())
+                has_selection = selected_count > 0
+                print(f"[SEWERAGE DEBUG] Selection changed: {selected_count} features selected in {layer.name()}")
+                self._update_recalculate_button_state(has_selection)
+            else:
+                print("[SEWERAGE DEBUG] Selection changed but no layer available")
+                self._update_recalculate_button_state(False)
         except Exception as e:
             print(f"[SEWERAGE DEBUG] Error in selection changed: {e}")
 
@@ -846,6 +859,9 @@ class SewerageDepthEstimatorDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         """Enable/disable recalculate button"""
         if hasattr(self, 'btnRecalculateSelected'):
             self.btnRecalculateSelected.setEnabled(enabled)
+            print(f"[SEWERAGE DEBUG] Recalculate button enabled: {enabled}")
+        else:
+            print("[SEWERAGE DEBUG] btnRecalculateSelected not found!")
 
     def _on_recalculate_selected(self):
         """Recalculate depths for selected segments"""
