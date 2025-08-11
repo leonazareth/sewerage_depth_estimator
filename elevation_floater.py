@@ -447,7 +447,7 @@ class ElevationFloaterController(QtCore.QObject):
                     
                     # Show if this is first point and depth was inherited
                     if dist < 0.01 and self._inherited_depth is not None:  # Within 1cm = first click
-                        lines.append(f"depth={depth_val:.2f} (inherited)")
+                        lines.append(f"<b><i><font color=\"#aa0000\">depth={depth_val:.2f}</font></i></b>")
                     else:
                         lines.append(f"depth={depth_val:.2f}")
                 except Exception:
@@ -455,8 +455,8 @@ class ElevationFloaterController(QtCore.QObject):
             else:
                 # Before first click: show depth from snap match if available
                 if self._current_snap_depth is not None:
-                    # Use simple HTML formatting that Qt definitely supports
-                    lines.append(f'<font color="red">depth={self._current_snap_depth:.2f}</font>')
+                    # Use consistent bold+italic red formatting for inherited depth
+                    lines.append(f'<b><i><font color="#aa0000">depth={self._current_snap_depth:.2f}</font></i></b>')
         if not lines:
             # Default to elevation text if nothing selected
             return self._nodata_text if elev is None else self._format.format(value=float(elev))
