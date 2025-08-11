@@ -26,7 +26,7 @@ import os
 
 from qgis.PyQt import QtGui, QtWidgets, uic
 from qgis.PyQt.QtCore import pyqtSignal
-from qgis.core import QgsProject, QgsMapLayer, QgsCoordinateReferenceSystem, QgsPointXY
+from qgis.core import QgsProject, QgsMapLayer, QgsCoordinateReferenceSystem
 try:
     from qgis.gui import QgsProjectionSelectionWidget
 except Exception:  # pragma: no cover - optional in some envs
@@ -85,17 +85,7 @@ class SewerageDepthEstimatorDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             self._push_gate_layer_to_floater()
         if hasattr(self, 'cmbDemLayer'):
             self.cmbDemLayer.currentIndexChanged.connect(self._on_dem_layer_changed)
-        # Wire recalc button and selection watcher
-        if hasattr(self, 'btnRecalcSelected'):
-            self.btnRecalcSelected.clicked.connect(self._on_recalc_selected)
-            self.btnRecalcSelected.setEnabled(False)
-        # Ensure selection listener is wired for the initially selected layer
-        try:
-            self._sel_layer = None
-            self._wire_selection_listener(self._current_line_layer())
-        except Exception:
-            pass
-        # No CRS selection widget; measure CRS will follow vector layer
+        # No CRS selection widget; measure CRS will follow the vector layer
         # Parameters wiring
         if hasattr(self, 'spnMinCover'):
             self.spnMinCover.valueChanged.connect(self._on_params_changed)
@@ -130,6 +120,9 @@ class SewerageDepthEstimatorDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         # Restore default style button
         if hasattr(self, 'btnRestoreDefaultStyle'):
             self.btnRestoreDefaultStyle.clicked.connect(self._on_restore_default_style)
+        # Recalculate selected segments button
+        if hasattr(self, 'btnRecalculateSelected'):
+            self.btnRecalculateSelected.clicked.connect(self._on_recalculate_selected)
 
         # Initialize floater params
         self._push_params_to_floater()
@@ -385,8 +378,9 @@ class SewerageDepthEstimatorDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         # Handle attribute creation button
         if hasattr(self, 'btnCreateDefaultAttrs'):
             self.btnCreateDefaultAttrs.clicked.connect(self._on_create_default_attrs)
-        # Track selection changes to enable/disable recalc button
-        self._wire_selection_listener(self._current_line_layer())
+        
+        # Monitor selection changes for recalculate button
+        self._connect_selection_monitoring()
 
     def _push_gate_layer_to_floater(self):
         if not self._floater:
@@ -397,198 +391,8 @@ class SewerageDepthEstimatorDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             # Measurement CRS follows vector layer CRS
             if lyr is not None and lyr.crs().isValid():
                 self._floater.set_measure_crs(lyr.crs())
-            # Also wire selection watcher on layer change
-            self._wire_selection_listener(lyr)
         except Exception:
             pass
-
-    def _on_selection_changed(self, *args):
-        try:
-            lyr = self._current_line_layer()
-            has_sel = bool(lyr and lyr.selectedFeatureCount() > 0)
-            if hasattr(self, 'btnRecalcSelected'):
-                self.btnRecalcSelected.setEnabled(has_sel)
-        except Exception:
-            if hasattr(self, 'btnRecalcSelected'):
-                self.btnRecalcSelected.setEnabled(False)
-
-    def _on_recalc_selected(self):
-        lyr = self._current_line_layer()
-        if lyr is None or not self._floater:
-            return
-        # Ensure latest params
-        self._push_params_to_floater()
-        try:
-            sel_fids = lyr.selectedFeatureIds()
-            if not sel_fids:
-                return
-            # Resolve field indices
-            p1e = self._resolve_field_index(lyr, 'cmbP1Elev', 'p1_elev')
-            p2e = self._resolve_field_index(lyr, 'cmbP2Elev', 'p2_elev')
-            p1h = self._resolve_field_index(lyr, 'cmbP1H', 'p1_h')
-            p2h = self._resolve_field_index(lyr, 'cmbP2H', 'p2_h')
-            if min(p1e, p2e, p1h, p2h) < 0:
-                if self.iface:
-                    self.iface.messageBar().pushWarning(self.tr("Sewerage Depth Estimator"), self.tr("Configure p1/p2 fields before recalculation."))
-                return
-            if not lyr.isEditable():
-                lyr.startEditing()
-
-            # Clear existing depths
-            for fid in sel_fids:
-                try:
-                    lyr.changeAttributeValue(fid, p1h, None)
-                    lyr.changeAttributeValue(fid, p2h, None)
-                except Exception:
-                    pass
-
-            # Ensure DEM and floater are ready for interpolation
-            dem = self._current_dem_layer() or self._pick_first_raster_layer()
-            if dem is None:
-                if self.iface:
-                    self.iface.messageBar().pushWarning(self.tr("Sewerage Depth Estimator"), self.tr("No DEM set for elevation interpolation."))
-                return
-            try:
-                self._floater.start(dem, band=1, number_format="{value:.2f}")
-            except Exception:
-                pass
-
-            # Collect features and coordinates
-            features = {f.id(): f for f in lyr.getFeatures(sel_fids)}
-            coords_by_fid = {}
-            for fid, f in features.items():
-                try:
-                    g = f.geometry()
-                    if not g or g.isEmpty():
-                        continue
-                    if g.isMultipart():
-                        lines = g.asMultiPolyline()
-                        pts = lines[0] if lines else []
-                    else:
-                        pts = g.asPolyline()
-                    if len(pts) < 2:
-                        continue
-                    coords_by_fid[fid] = (QgsPointXY(pts[0]), QgsPointXY(pts[-1]))
-                except Exception:
-                    continue
-
-            # Interpolate missing elevations
-            for fid, f in features.items():
-                try:
-                    if fid not in coords_by_fid:
-                        continue
-                    p1pt, p2pt = coords_by_fid[fid]
-                    # p1 elev
-                    if f.attribute(p1e) in (None, '') and self._floater and self._floater._interp:
-                        lyr_pt = self._floater._to_raster.transform(QgsPointXY(p1pt)) if self._floater._to_raster else None
-                        elev = self._floater._interp.bilinear(lyr_pt) if lyr_pt else None
-                        if elev is not None:
-                            lyr.changeAttributeValue(fid, p1e, round(float(elev), 2))
-                    # p2 elev
-                    if f.attribute(p2e) in (None, '') and self._floater and self._floater._interp:
-                        lyr_pt = self._floater._to_raster.transform(QgsPointXY(p2pt)) if self._floater._to_raster else None
-                        elev = self._floater._interp.bilinear(lyr_pt) if lyr_pt else None
-                        if elev is not None:
-                            lyr.changeAttributeValue(fid, p2e, round(float(elev), 2))
-                except Exception:
-                    continue
-
-            # Build selected subgraph indices
-            def key(pt: QgsPointXY) -> str:
-                return f"{pt.x():.6f},{pt.y():.6f}"
-            p2_to_feats, p1_from_feats = {}, {}
-            for fid, (p1pt, p2pt) in coords_by_fid.items():
-                p2_to_feats.setdefault(key(p2pt), []).append(fid)
-                p1_from_feats.setdefault(key(p1pt), []).append(fid)
-
-            # Roots (no selected upstream)
-            roots = [fid for fid, (p1pt, _) in coords_by_fid.items() if key(p1pt) not in p2_to_feats]
-
-            # Parameters
-            min_cover_m = float(self.spnMinCover.value()) if hasattr(self, 'spnMinCover') else 0.9
-            diameter_m = (float(self.spnDiameter.value())/1000.0) if hasattr(self, 'spnDiameter') else 0.150
-            slope = float(self.spnSlope.value()) if hasattr(self, 'spnSlope') else 0.005
-            init_depth = float(self.spnInitialDepth.value()) if hasattr(self, 'spnInitialDepth') else 0.0
-
-            def enforce_min_cover(ground_elev: float, proposed_bottom: float) -> float:
-                min_bottom = ground_elev - (min_cover_m + diameter_m)
-                return min(proposed_bottom, min_bottom)
-
-            # Traverse
-            visited = set()
-            for root in roots:
-                try:
-                    if root not in features or root not in coords_by_fid:
-                        continue
-                    f = features[root]
-                    p1pt, p2pt = coords_by_fid[root]
-                    ge1 = f.attribute(p1e); ge2 = f.attribute(p2e)
-                    ge1 = float(ge1) if ge1 not in (None, '') else None
-                    ge2 = float(ge2) if ge2 not in (None, '') else None
-                    if ge1 is None:
-                        continue
-                    p1_depth = init_depth if init_depth > 0 else (min_cover_m + diameter_m)
-                    lyr.changeAttributeValue(root, p1h, round(float(p1_depth), 2))
-                    seg_len = self._floater._distance_m(p1pt, p2pt)
-                    upstream_bottom = ge1 - p1_depth
-                    downstream_bottom = upstream_bottom - seg_len * max(0.0, slope)
-                    if ge2 is not None:
-                        downstream_bottom = enforce_min_cover(ge2, downstream_bottom)
-                        p2_depth = ge2 - downstream_bottom
-                        lyr.changeAttributeValue(root, p2h, round(float(p2_depth), 2))
-                except Exception:
-                    pass
-
-                # DFS downstream
-                stack = [root]
-                while stack:
-                    cur = stack.pop()
-                    if cur in visited:
-                        continue
-                    visited.add(cur)
-                    try:
-                        _, cur_p2 = coords_by_fid[cur]
-                        for nid in p1_from_feats.get(key(cur_p2), []):
-                            if nid in visited or nid not in features or nid not in coords_by_fid:
-                                continue
-                            parent_f = features[cur]
-                            nid_f = features[nid]
-                            parent_p2_depth_val = parent_f.attribute(p2h)
-                            if parent_p2_depth_val in (None, ''):
-                                continue
-                            parent_p2_depth = float(parent_p2_depth_val)
-                            # set child's p1 depth
-                            lyr.changeAttributeValue(nid, p1h, round(parent_p2_depth, 2))
-                            # compute child's p2 depth
-                            p1pt, p2pt = coords_by_fid[nid]
-                            ge1 = nid_f.attribute(p1e); ge2 = nid_f.attribute(p2e)
-                            ge1 = float(ge1) if ge1 not in (None, '') else None
-                            ge2 = float(ge2) if ge2 not in (None, '') else None
-                            if ge1 is None:
-                                continue
-                            seg_len = self._floater._distance_m(p1pt, p2pt)
-                            upstream_bottom = ge1 - parent_p2_depth
-                            downstream_bottom = upstream_bottom - seg_len * max(0.0, slope)
-                            if ge2 is not None:
-                                downstream_bottom = enforce_min_cover(ge2, downstream_bottom)
-                                p2_depth = ge2 - downstream_bottom
-                                lyr.changeAttributeValue(nid, p2h, round(float(p2_depth), 2))
-                            stack.append(nid)
-                    except Exception:
-                        continue
-
-            try:
-                if self.iface:
-                    # QGIS stable APIs: use info as success indicator
-                    self.iface.messageBar().pushInfo(self.tr("Sewerage Depth Estimator"), self.tr("Recalculation complete."))
-            except Exception:
-                pass
-        except Exception:
-            try:
-                if self.iface:
-                    self.iface.messageBar().pushCritical(self.tr("Sewerage Depth Estimator"), self.tr("Recalculation failed."))
-            except Exception:
-                pass
 
     def _on_create_default_attrs(self):
         lyr = self._current_line_layer()
@@ -1005,3 +809,316 @@ class SewerageDepthEstimatorDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             
         except Exception as e:
             print(f"[SEWERAGE DEBUG] Error saving project config: {e}")
+
+    def _connect_selection_monitoring(self):
+        """Connect selection change monitoring for current line layer"""
+        try:
+            # Disconnect previous connections
+            if hasattr(self, '_current_monitored_layer') and self._current_monitored_layer:
+                try:
+                    self._current_monitored_layer.selectionChanged.disconnect(self._on_selection_changed)
+                except:
+                    pass
+            
+            # Connect to current layer
+            layer = self._current_line_layer()
+            if layer:
+                layer.selectionChanged.connect(self._on_selection_changed)
+                self._current_monitored_layer = layer
+                # Update button state immediately
+                self._on_selection_changed()
+            else:
+                self._current_monitored_layer = None
+                self._update_recalculate_button_state(False)
+        except Exception as e:
+            print(f"[SEWERAGE DEBUG] Error connecting selection monitoring: {e}")
+
+    def _on_selection_changed(self):
+        """Update recalculate button state based on selection"""
+        try:
+            layer = self._current_line_layer()
+            has_selection = layer and len(layer.selectedFeatures()) > 0
+            self._update_recalculate_button_state(has_selection)
+        except Exception as e:
+            print(f"[SEWERAGE DEBUG] Error in selection changed: {e}")
+
+    def _update_recalculate_button_state(self, enabled: bool):
+        """Enable/disable recalculate button"""
+        if hasattr(self, 'btnRecalculateSelected'):
+            self.btnRecalculateSelected.setEnabled(enabled)
+
+    def _on_recalculate_selected(self):
+        """Recalculate depths for selected segments"""
+        try:
+            layer = self._current_line_layer()
+            if not layer:
+                if self.iface:
+                    self.iface.messageBar().pushWarning("Sewerage Depth Estimator", "No line layer selected")
+                return
+            
+            selected_features = layer.selectedFeatures()
+            if not selected_features:
+                if self.iface:
+                    self.iface.messageBar().pushWarning("Sewerage Depth Estimator", "No features selected")
+                return
+
+            # Get current parameters
+            min_cover = self.spnMinCover.value() if hasattr(self, 'spnMinCover') else 0.9
+            diameter = self.spnDiameter.value() / 1000.0 if hasattr(self, 'spnDiameter') else 0.15  # Convert mm to m
+            slope = self.spnSlope.value() if hasattr(self, 'spnSlope') else 0.005
+            initial_depth = self.spnInitialDepth.value() if hasattr(self, 'spnInitialDepth') else 0.0
+
+            # Get DEM layer for elevation interpolation
+            dem_layer = self._current_dem_layer()
+            if not dem_layer:
+                if self.iface:
+                    self.iface.messageBar().pushWarning("Sewerage Depth Estimator", "No DEM layer selected")
+                return
+
+            # Start editing if needed
+            if not layer.isEditable():
+                layer.startEditing()
+
+            # Clear existing depths and interpolate missing elevations
+            self._prepare_selected_features(selected_features, layer, dem_layer)
+
+            # Calculate depths using tree algorithm
+            self._calculate_tree_depths(selected_features, layer, min_cover, diameter, slope, initial_depth)
+
+            if self.iface:
+                self.iface.messageBar().pushSuccess("Sewerage Depth Estimator", 
+                                                   f"Recalculated depths for {len(selected_features)} segments")
+
+        except Exception as e:
+            print(f"[SEWERAGE DEBUG] Error in recalculate selected: {e}")
+            if self.iface:
+                self.iface.messageBar().pushCritical("Sewerage Depth Estimator", f"Error: {str(e)}")
+
+    def _prepare_selected_features(self, selected_features, layer, dem_layer):
+        """Clear depths and interpolate missing elevations for selected features"""
+        from .elevation_floater import RasterInterpolator
+        from qgis.core import QgsCoordinateTransform, QgsProject, QgsPointXY
+        
+        # Get field indices
+        field_mapping = self._get_field_mapping(layer)
+        p1_elev_idx = field_mapping.get('p1_elev', -1)
+        p2_elev_idx = field_mapping.get('p2_elev', -1)
+        p1_h_idx = field_mapping.get('p1_h', -1)
+        p2_h_idx = field_mapping.get('p2_h', -1)
+
+        # Setup raster interpolator
+        interpolator = RasterInterpolator(dem_layer, band=1)
+        transform_context = QgsProject.instance().transformContext()
+        to_raster = QgsCoordinateTransform(layer.crs(), dem_layer.crs(), transform_context)
+
+        for feature in selected_features:
+            try:
+                # Clear existing depths
+                if p1_h_idx >= 0:
+                    layer.changeAttributeValue(feature.id(), p1_h_idx, None)
+                if p2_h_idx >= 0:
+                    layer.changeAttributeValue(feature.id(), p2_h_idx, None)
+
+                # Get geometry endpoints
+                geom = feature.geometry()
+                if geom.isEmpty():
+                    continue
+                
+                if geom.isMultipart():
+                    lines = geom.asMultiPolyline()
+                    if not lines:
+                        continue
+                    pts = lines[0]
+                else:
+                    pts = geom.asPolyline()
+                
+                if len(pts) < 2:
+                    continue
+
+                p1, p2 = QgsPointXY(pts[0]), QgsPointXY(pts[-1])
+
+                # Interpolate missing elevations
+                if p1_elev_idx >= 0:
+                    p1_elev = feature.attribute(p1_elev_idx)
+                    if p1_elev is None or p1_elev == '':
+                        try:
+                            p1_raster = to_raster.transform(p1)
+                            elev = interpolator.bilinear(p1_raster)
+                            if elev is not None:
+                                layer.changeAttributeValue(feature.id(), p1_elev_idx, round(float(elev), 2))
+                        except:
+                            pass
+
+                if p2_elev_idx >= 0:
+                    p2_elev = feature.attribute(p2_elev_idx)
+                    if p2_elev is None or p2_elev == '':
+                        try:
+                            p2_raster = to_raster.transform(p2)
+                            elev = interpolator.bilinear(p2_raster)
+                            if elev is not None:
+                                layer.changeAttributeValue(feature.id(), p2_elev_idx, round(float(elev), 2))
+                        except:
+                            pass
+
+            except Exception as e:
+                print(f"[SEWERAGE DEBUG] Error preparing feature {feature.id()}: {e}")
+
+    def _calculate_tree_depths(self, selected_features, layer, min_cover, diameter, slope, initial_depth):
+        """Calculate depths using tree traversal algorithm for open sewerage networks"""
+        from qgis.core import QgsPointXY
+        
+        # Get field indices
+        field_mapping = self._get_field_mapping(layer)
+        p1_elev_idx = field_mapping.get('p1_elev', -1)
+        p2_elev_idx = field_mapping.get('p2_elev', -1)
+        p1_h_idx = field_mapping.get('p1_h', -1)
+        p2_h_idx = field_mapping.get('p2_h', -1)
+
+        if min(p1_elev_idx, p2_elev_idx, p1_h_idx, p2_h_idx) < 0:
+            raise Exception("Missing required elevation or depth fields")
+
+        # Build network topology
+        segments = []
+        node_connections = {}  # node_key -> list of (segment_idx, is_upstream)
+
+        def node_key(pt: QgsPointXY) -> str:
+            return f"{pt.x():.6f},{pt.y():.6f}"
+
+        # Extract segments and build topology
+        for i, feature in enumerate(selected_features):
+            geom = feature.geometry()
+            if geom.isEmpty():
+                continue
+                
+            if geom.isMultipart():
+                lines = geom.asMultiPolyline()
+                if not lines:
+                    continue
+                pts = lines[0]
+            else:
+                pts = geom.asPolyline()
+            
+            if len(pts) < 2:
+                continue
+
+            p1, p2 = QgsPointXY(pts[0]), QgsPointXY(pts[-1])
+            
+            # Get elevations
+            p1_elev = feature.attribute(p1_elev_idx)
+            p2_elev = feature.attribute(p2_elev_idx)
+            
+            try:
+                p1_elev = float(p1_elev) if p1_elev not in (None, '') else None
+                p2_elev = float(p2_elev) if p2_elev not in (None, '') else None
+            except:
+                continue
+
+            if p1_elev is None or p2_elev is None:
+                continue
+
+            # Calculate segment length
+            seg_length = ((p2.x() - p1.x()) ** 2 + (p2.y() - p1.y()) ** 2) ** 0.5
+
+            segment_data = {
+                'feature': feature,
+                'p1': p1,
+                'p2': p2,
+                'p1_elev': p1_elev,
+                'p2_elev': p2_elev,
+                'length': seg_length,
+                'processed': False
+            }
+            segments.append(segment_data)
+
+            # Update topology
+            p1_key = node_key(p1)
+            p2_key = node_key(p2)
+            
+            node_connections.setdefault(p1_key, []).append((i, True))   # p1 is upstream
+            node_connections.setdefault(p2_key, []).append((i, False))  # p2 is downstream
+
+        # Find root segments (no upstream connections)
+        roots = []
+        for i, seg in enumerate(segments):
+            p1_key = node_key(seg['p1'])
+            has_upstream = any(not is_upstream for _, is_upstream in node_connections.get(p1_key, []))
+            if not has_upstream:
+                roots.append(i)
+
+        print(f"[SEWERAGE DEBUG] Found {len(roots)} root segments from {len(segments)} total")
+
+        # Process each tree starting from roots
+        for root_idx in roots:
+            self._process_tree_branch(root_idx, segments, node_connections, layer, 
+                                    min_cover, diameter, slope, initial_depth,
+                                    p1_h_idx, p2_h_idx)
+
+    def _process_tree_branch(self, seg_idx, segments, node_connections, layer,
+                           min_cover, diameter, slope, initial_depth,
+                           p1_h_idx, p2_h_idx):
+        """Process a branch of the tree starting from given segment"""
+        def node_key(pt):
+            return f"{pt.x():.6f},{pt.y():.6f}"
+
+        stack = [(seg_idx, initial_depth if initial_depth > 0 else None)]
+        
+        while stack:
+            current_idx, upstream_depth = stack.pop()
+            segment = segments[current_idx]
+            
+            if segment['processed']:
+                continue
+                
+            segment['processed'] = True
+            
+            # Calculate upstream depth if not provided
+            if upstream_depth is None:
+                # Use minimum cover + diameter
+                total_depth = min_cover + diameter
+                upstream_depth = total_depth
+            
+            # Calculate downstream depth considering slope and minimum cover
+            fall = segment['length'] * slope
+            downstream_candidate = upstream_depth + fall
+            
+            # Enforce minimum cover at downstream
+            min_downstream = min_cover + diameter
+            downstream_depth = max(downstream_candidate, min_downstream)
+            
+            # Write depths to feature
+            feature = segment['feature']
+            layer.changeAttributeValue(feature.id(), p1_h_idx, round(upstream_depth, 2))
+            layer.changeAttributeValue(feature.id(), p2_h_idx, round(downstream_depth, 2))
+            
+            print(f"[SEWERAGE DEBUG] Segment {feature.id()}: upstream={upstream_depth:.2f}m, downstream={downstream_depth:.2f}m")
+            
+            # Find downstream segments
+            p2_key = node_key(segment['p2'])
+            downstream_segments = [idx for idx, is_upstream in node_connections.get(p2_key, []) if is_upstream]
+            
+            # Add downstream segments to stack
+            for ds_idx in downstream_segments:
+                if not segments[ds_idx]['processed']:
+                    stack.append((ds_idx, downstream_depth))
+
+    def _get_field_mapping(self, layer):
+        """Get field mapping for the given layer"""
+        try:
+            p1e_idx = self._resolve_field_index(layer, 'cmbP1Elev', 'p1_elev')
+            p2e_idx = self._resolve_field_index(layer, 'cmbP2Elev', 'p2_elev') 
+            p1h_idx = self._resolve_field_index(layer, 'cmbP1H', 'p1_h')
+            p2h_idx = self._resolve_field_index(layer, 'cmbP2H', 'p2_h')
+            
+            return {
+                'p1_elev': p1e_idx,
+                'p2_elev': p2e_idx,
+                'p1_h': p1h_idx,
+                'p2_h': p2h_idx
+            }
+        except:
+            return {
+                'p1_elev': layer.fields().indexOf('p1_elev'),
+                'p2_elev': layer.fields().indexOf('p2_elev'),
+                'p1_h': layer.fields().indexOf('p1_h'),
+                'p2_h': layer.fields().indexOf('p2_h')
+            }
