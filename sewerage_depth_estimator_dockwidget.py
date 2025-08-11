@@ -89,7 +89,13 @@ class SewerageDepthEstimatorDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         if hasattr(self, 'btnRecalcSelected'):
             self.btnRecalcSelected.clicked.connect(self._on_recalc_selected)
             self.btnRecalcSelected.setEnabled(False)
-        # No CRS selection widget; measure CRS will follow the vector layer
+        # Ensure selection listener is wired for the initially selected layer
+        try:
+            self._sel_layer = None
+            self._wire_selection_listener(self._current_line_layer())
+        except Exception:
+            pass
+        # No CRS selection widget; measure CRS will follow vector layer
         # Parameters wiring
         if hasattr(self, 'spnMinCover'):
             self.spnMinCover.valueChanged.connect(self._on_params_changed)
@@ -379,21 +385,8 @@ class SewerageDepthEstimatorDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         # Handle attribute creation button
         if hasattr(self, 'btnCreateDefaultAttrs'):
             self.btnCreateDefaultAttrs.clicked.connect(self._on_create_default_attrs)
-
         # Track selection changes to enable/disable recalc button
-        lyr = self._current_line_layer()
-        try:
-            if hasattr(self, '_sel_conn') and self._sel_conn:
-                self._sel_conn.disconnect()
-        except Exception:
-            pass
-        if lyr is not None:
-            try:
-                self._sel_conn = lyr.selectionChanged
-                self._sel_conn.connect(self._on_selection_changed)
-                self._on_selection_changed()
-            except Exception:
-                pass
+        self._wire_selection_listener(self._current_line_layer())
 
     def _push_gate_layer_to_floater(self):
         if not self._floater:
@@ -404,8 +397,8 @@ class SewerageDepthEstimatorDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             # Measurement CRS follows vector layer CRS
             if lyr is not None and lyr.crs().isValid():
                 self._floater.set_measure_crs(lyr.crs())
-            # Also keep recalc button state in sync if layer changes
-            self._on_selection_changed()
+            # Also wire selection watcher on layer change
+            self._wire_selection_listener(lyr)
         except Exception:
             pass
 
