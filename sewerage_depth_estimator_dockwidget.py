@@ -1152,84 +1152,27 @@ class SewerageDepthEstimatorDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
     def _process_convergent_network(self, segments, node_connections, layer, dem_layer,
                                    min_cover, diameter, slope, initial_depth,
                                    p1_h_idx, p2_h_idx):
-        """Process network considering convergent flows and junction compatibility"""
+        """Process network using topological sort with junction resolution"""
         def node_key(pt):
             return f"{pt.x():.6f},{pt.y():.6f}"
         
-        print("[SEWERAGE DEBUG] Starting convergent network processing...")
+        print("[SEWERAGE DEBUG] Starting efficient topological network processing...")
         
-        # Track computed depths at each node (junction)
-        node_depths = {}  # node_key -> max_depth
-        
-        # Track which segments have been computed and need recalculation
+        # Build dependency graph and find processing order
+        processed_segments = set()
+        node_depths = {}  # node_key -> resolved_depth
         segment_depths = {}  # seg_idx -> (p1_depth, p2_depth)
         
-        max_iterations = 10
-        iteration = 0
-        changes_made = True
+        # Find all junctions (nodes with multiple connections)
+        junctions = set()
+        for node, connections in node_connections.items():
+            if len(connections) > 1:
+                junctions.add(node)
+                print(f"[SEWERAGE DEBUG] Junction found at {node} with {len(connections)} connections")
         
-        while changes_made and iteration < max_iterations:
-            iteration += 1
-            changes_made = False
-            print(f"[SEWERAGE DEBUG] --- Iteration {iteration} ---")
-            
-            # Process all segments in topological order (roots first)
-            processed_this_iteration = set()
-            
-            for seg_idx, segment in enumerate(segments):
-                if seg_idx in processed_this_iteration:
-                    continue
-                    
-                # Check if we can process this segment (all upstream depths known)
-                p1_key = node_key(segment['p1'])
-                
-                # Determine upstream depth
-                if p1_key in node_depths:
-                    # Use depth from junction
-                    upstream_depth = node_depths[p1_key]
-                    print(f"[SEWERAGE DEBUG]   Segment {seg_idx}: Using junction depth {upstream_depth:.2f}m at {p1_key}")
-                else:
-                    # Check if this is a root segment
-                    has_upstream = any(not is_upstream for _, is_upstream in node_connections.get(p1_key, []))
-                    if not has_upstream:
-                        # This is a root - use initial depth or minimum
-                        upstream_depth = max(initial_depth, min_cover + diameter) if initial_depth > 0 else min_cover + diameter
-                        # Set the junction depth for root
-                        node_depths[p1_key] = upstream_depth
-                        print(f"[SEWERAGE DEBUG]   Segment {seg_idx}: Root segment, using initial depth {upstream_depth:.2f}m")
-                    else:
-                        # Wait for upstream segments to be processed
-                        print(f"[SEWERAGE DEBUG]   Segment {seg_idx}: Waiting for upstream segments")
-                        continue
-                
-                # Calculate downstream depth for this segment
-                old_depths = segment_depths.get(seg_idx, (None, None))
-                new_p1_depth, new_p2_depth = self._calculate_segment_depths(
-                    segment, upstream_depth, min_cover, diameter, slope)
-                
-                # Check if depths changed
-                if old_depths != (new_p1_depth, new_p2_depth):
-                    changes_made = True
-                    segment_depths[seg_idx] = (new_p1_depth, new_p2_depth)
-                    
-                    print(f"[SEWERAGE DEBUG]   Segment {seg_idx} (Feature {segment['feature'].id()}): {new_p1_depth:.2f}m -> {new_p2_depth:.2f}m")
-                    
-                    # Update node depths (take maximum at each junction)
-                    p2_key = node_key(segment['p2'])
-                    if p2_key not in node_depths or new_p2_depth > node_depths[p2_key]:
-                        old_depth = node_depths.get(p2_key, 0)
-                        node_depths[p2_key] = new_p2_depth
-                        if old_depth != new_p2_depth:
-                            print(f"[SEWERAGE DEBUG]   Junction {p2_key}: Updated depth from {old_depth:.2f}m to {new_p2_depth:.2f}m")
-                            # Mark downstream segments for recalculation
-                            self._mark_downstream_for_recalc(seg_idx, segments, node_connections, processed_this_iteration)
-                
-                processed_this_iteration.add(seg_idx)
-        
-        if iteration >= max_iterations:
-            print(f"[SEWERAGE DEBUG] WARNING: Maximum iterations ({max_iterations}) reached!")
-        else:
-            print(f"[SEWERAGE DEBUG] Network converged after {iteration} iterations")
+        # Process network by resolving each junction completely before moving downstream
+        self._process_topological_order(segments, node_connections, junctions, processed_segments, 
+                                      node_depths, segment_depths, min_cover, diameter, slope, initial_depth)
         
         # Write final depths to features
         print("[SEWERAGE DEBUG] Writing final depths to features...")
@@ -1238,6 +1181,113 @@ class SewerageDepthEstimatorDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             layer.changeAttributeValue(feature.id(), p1_h_idx, round(p1_depth, 2))
             layer.changeAttributeValue(feature.id(), p2_h_idx, round(p2_depth, 2))
             print(f"[SEWERAGE DEBUG]   Final Feature {feature.id()}: P1_H={round(p1_depth, 2)}m, P2_H={round(p2_depth, 2)}m")
+
+    def _process_topological_order(self, segments, node_connections, junctions, processed_segments,
+                                 node_depths, segment_depths, min_cover, diameter, slope, initial_depth):
+        """Process network in topological order, resolving junctions efficiently"""
+        def node_key(pt):
+            return f"{pt.x():.6f},{pt.y():.6f}"
+        
+        # Find root segments (segments with no upstream connections)
+        root_segments = []
+        for seg_idx, segment in enumerate(segments):
+            p1_key = node_key(segment['p1'])
+            has_upstream = any(not is_upstream for _, is_upstream in node_connections.get(p1_key, []))
+            if not has_upstream:
+                root_segments.append(seg_idx)
+                # Set initial depth for root nodes
+                upstream_depth = max(initial_depth, min_cover + diameter) if initial_depth > 0 else min_cover + diameter
+                node_depths[p1_key] = upstream_depth
+                print(f"[SEWERAGE DEBUG] Root segment {seg_idx} at {p1_key}, initial depth: {upstream_depth:.2f}m")
+        
+        print(f"[SEWERAGE DEBUG] Found {len(root_segments)} root segments: {root_segments}")
+        
+        # Process each subtree rooted at root segments
+        for root_seg_idx in root_segments:
+            print(f"[SEWERAGE DEBUG] Processing subtree from root segment {root_seg_idx}")
+            self._process_subtree(root_seg_idx, segments, node_connections, junctions, 
+                                processed_segments, node_depths, segment_depths, 
+                                min_cover, diameter, slope)
+
+    def _process_subtree(self, start_seg_idx, segments, node_connections, junctions,
+                        processed_segments, node_depths, segment_depths, 
+                        min_cover, diameter, slope):
+        """Process a subtree starting from a segment, resolving junctions along the way"""
+        def node_key(pt):
+            return f"{pt.x():.6f},{pt.y():.6f}"
+        
+        # Use a queue to process segments in order
+        queue = [start_seg_idx]
+        
+        while queue:
+            seg_idx = queue.pop(0)
+            
+            if seg_idx in processed_segments:
+                continue
+                
+            segment = segments[seg_idx]
+            p1_key = node_key(segment['p1'])
+            p2_key = node_key(segment['p2'])
+            
+            # Check if we can process this segment (upstream depth must be available)
+            if p1_key not in node_depths:
+                print(f"[SEWERAGE DEBUG]   Segment {seg_idx}: Upstream depth not available, skipping")
+                continue
+            
+            upstream_depth = node_depths[p1_key]
+            print(f"[SEWERAGE DEBUG]   Processing segment {seg_idx} (Feature {segment['feature'].id()}) with upstream depth {upstream_depth:.2f}m")
+            
+            # Calculate segment depths
+            p1_depth, p2_depth = self._calculate_segment_depths(segment, upstream_depth, min_cover, diameter, slope)
+            segment_depths[seg_idx] = (p1_depth, p2_depth)
+            processed_segments.add(seg_idx)
+            
+            print(f"[SEWERAGE DEBUG]   Calculated depths: {p1_depth:.2f}m -> {p2_depth:.2f}m")
+            
+            # Check if downstream node is a junction
+            if p2_key in junctions:
+                print(f"[SEWERAGE DEBUG]   Downstream node {p2_key} is a junction")
+                
+                # Check if all upstream segments to this junction are processed
+                upstream_segments_to_junction = [idx for idx, is_upstream in node_connections.get(p2_key, []) if not is_upstream]
+                all_upstream_processed = all(us_idx in processed_segments for us_idx in upstream_segments_to_junction)
+                
+                if all_upstream_processed:
+                    # Resolve junction depth (take maximum from all upstream segments)
+                    max_depth = 0
+                    contributing_segments = []
+                    for us_idx in upstream_segments_to_junction:
+                        if us_idx in segment_depths:
+                            us_p2_depth = segment_depths[us_idx][1]  # downstream depth of upstream segment
+                            if us_p2_depth > max_depth:
+                                max_depth = us_p2_depth
+                            contributing_segments.append((us_idx, us_p2_depth))
+                    
+                    node_depths[p2_key] = max_depth
+                    print(f"[SEWERAGE DEBUG]   Junction {p2_key} resolved: max depth {max_depth:.2f}m from segments {contributing_segments}")
+                    
+                    # Add downstream segments to queue
+                    downstream_segments = [idx for idx, is_upstream in node_connections.get(p2_key, []) if is_upstream]
+                    for ds_idx in downstream_segments:
+                        if ds_idx not in processed_segments and ds_idx not in queue:
+                            queue.append(ds_idx)
+                            print(f"[SEWERAGE DEBUG]   Added downstream segment {ds_idx} to queue")
+                else:
+                    print(f"[SEWERAGE DEBUG]   Junction {p2_key}: waiting for upstream segments {[us for us in upstream_segments_to_junction if us not in processed_segments]}")
+                    # Re-add this segment to queue for later processing
+                    queue.append(seg_idx)
+                    processed_segments.discard(seg_idx)
+            else:
+                # Not a junction - simply set the depth and continue
+                node_depths[p2_key] = p2_depth
+                print(f"[SEWERAGE DEBUG]   Regular node {p2_key}: depth {p2_depth:.2f}m")
+                
+                # Add downstream segments to queue
+                downstream_segments = [idx for idx, is_upstream in node_connections.get(p2_key, []) if is_upstream]
+                for ds_idx in downstream_segments:
+                    if ds_idx not in processed_segments and ds_idx not in queue:
+                        queue.append(ds_idx)
+                        print(f"[SEWERAGE DEBUG]   Added downstream segment {ds_idx} to queue")
 
     def _calculate_segment_depths(self, segment, upstream_depth, min_cover, diameter, slope):
         """Calculate depths for a single segment"""
@@ -1270,107 +1320,6 @@ class SewerageDepthEstimatorDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         print(f"[SEWERAGE DEBUG]     Final depth: {downstream_depth:.2f}m, Actual slope: {actual_slope:.4f}")
         
         return upstream_depth, downstream_depth
-
-    def _mark_downstream_for_recalc(self, seg_idx, segments, node_connections, processed_this_iteration):
-        """Mark downstream segments for recalculation when junction depth changes"""
-        def node_key(pt):
-            return f"{pt.x():.6f},{pt.y():.6f}"
-        
-        segment = segments[seg_idx]
-        p2_key = node_key(segment['p2'])
-        
-        # Find all downstream segments connected to this junction
-        downstream_segments = [idx for idx, is_upstream in node_connections.get(p2_key, []) if is_upstream]
-        
-        for ds_idx in downstream_segments:
-            if ds_idx in processed_this_iteration:
-                processed_this_iteration.discard(ds_idx)
-                print(f"[SEWERAGE DEBUG]     Marked downstream segment {ds_idx} for recalculation")
-
-    def _process_tree_branch(self, seg_idx, segments, node_connections, layer, dem_layer,
-                           min_cover, diameter, slope, initial_depth,
-                           p1_h_idx, p2_h_idx):
-        """Process a branch of the tree starting from given segment"""
-        def node_key(pt):
-            return f"{pt.x():.6f},{pt.y():.6f}"
-
-        stack = [(seg_idx, initial_depth if initial_depth > 0 else None)]
-        
-        print(f"[SEWERAGE DEBUG]   Starting branch processing with initial_depth={initial_depth}")
-        
-        while stack:
-            current_idx, upstream_depth = stack.pop()
-            segment = segments[current_idx]
-            
-            print(f"[SEWERAGE DEBUG]   Processing segment {current_idx} (Feature {segment['feature'].id()}) with upstream_depth={upstream_depth}")
-            
-            if segment['processed']:
-                print(f"[SEWERAGE DEBUG]     Skipping already processed segment {current_idx}")
-                continue
-                
-            segment['processed'] = True
-            
-            # Calculate upstream depth if not provided
-            if upstream_depth is None:
-                # Use minimum cover + diameter
-                total_depth = min_cover + diameter
-                upstream_depth = total_depth
-                print(f"[SEWERAGE DEBUG]     Calculated initial upstream depth: {upstream_depth:.2f}m (min_cover={min_cover} + diameter={diameter})")
-            else:
-                print(f"[SEWERAGE DEBUG]     Using provided upstream depth: {upstream_depth:.2f}m")
-            
-            # Calculate downstream depth considering terrain, slope and minimum cover
-            p1_elev = segment['p1_elev']
-            p2_elev = segment['p2_elev']
-            elevation_diff = p1_elev - p2_elev  # Positive if P1 is higher than P2
-            
-            # Calculate upstream bottom elevation (invert)
-            upstream_bottom_elev = p1_elev - upstream_depth
-            
-            # Calculate required downstream bottom elevation based on slope
-            fall = segment['length'] * slope
-            downstream_bottom_elev = upstream_bottom_elev - fall  # Bottom should be lower downstream
-            
-            # Calculate downstream depth from ground
-            downstream_depth_candidate = p2_elev - downstream_bottom_elev
-            
-            # Enforce minimum cover at downstream
-            min_downstream_depth = min_cover + diameter
-            downstream_depth = max(downstream_depth_candidate, min_downstream_depth)
-            
-            # If we had to adjust for minimum cover, recalculate the actual slope achieved
-            actual_downstream_bottom = p2_elev - downstream_depth
-            actual_fall = upstream_bottom_elev - actual_downstream_bottom
-            actual_slope = actual_fall / segment['length'] if segment['length'] > 0 else 0
-            
-            print(f"[SEWERAGE DEBUG]     Terrain elevations: P1={p1_elev:.2f}m, P2={p2_elev:.2f}m, diff={elevation_diff:.2f}m")
-            print(f"[SEWERAGE DEBUG]     Upstream bottom elev: {upstream_bottom_elev:.2f}m (ground {p1_elev:.2f}m - depth {upstream_depth:.2f}m)")
-            print(f"[SEWERAGE DEBUG]     Required fall: {fall:.3f}m (length={segment['length']:.2f}m × slope={slope})")
-            print(f"[SEWERAGE DEBUG]     Target downstream bottom: {downstream_bottom_elev:.2f}m")
-            print(f"[SEWERAGE DEBUG]     Downstream depth candidate: {downstream_depth_candidate:.2f}m, min_required: {min_downstream_depth:.2f}m")
-            print(f"[SEWERAGE DEBUG]     Final downstream depth: {downstream_depth:.2f}m")
-            print(f"[SEWERAGE DEBUG]     Actual slope achieved: {actual_slope:.4f} m/m")
-            
-            # Write depths to feature
-            feature = segment['feature']
-            layer.changeAttributeValue(feature.id(), p1_h_idx, round(upstream_depth, 2))
-            layer.changeAttributeValue(feature.id(), p2_h_idx, round(downstream_depth, 2))
-            
-            print(f"[SEWERAGE DEBUG]     Written to Feature {feature.id()}: P1_H={round(upstream_depth, 2)}m, P2_H={round(downstream_depth, 2)}m")
-            
-            # Find downstream segments
-            p2_key = node_key(segment['p2'])
-            downstream_segments = [idx for idx, is_upstream in node_connections.get(p2_key, []) if is_upstream]
-            
-            print(f"[SEWERAGE DEBUG]     Found {len(downstream_segments)} downstream segments: {downstream_segments}")
-            
-            # Add downstream segments to stack
-            for ds_idx in downstream_segments:
-                if not segments[ds_idx]['processed']:
-                    print(f"[SEWERAGE DEBUG]     Adding downstream segment {ds_idx} to stack with depth {downstream_depth:.2f}m")
-                    stack.append((ds_idx, downstream_depth))
-                else:
-                    print(f"[SEWERAGE DEBUG]     Downstream segment {ds_idx} already processed, skipping")
 
     def _get_field_mapping(self, layer):
         """Get field mapping for the given layer"""
