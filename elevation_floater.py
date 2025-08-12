@@ -621,9 +621,8 @@ class ElevationFloaterController(QtCore.QObject):
                         continue
             
         except Exception as e:
-            print(f"[SEWERAGE DEBUG] Error searching for existing depth: {e}")
-            
-        if max_depth is not None:
+            # print(f"[SEWERAGE DEBUG] Error searching for existing depth: {e}")
+            pass
             # Debug: Commented out verbose depth selection logging
             # print(f"[SEWERAGE DEBUG] Selected maximum coincident depth: {max_depth:.3f}m")
             pass
@@ -674,9 +673,8 @@ class ElevationFloaterController(QtCore.QObject):
                                 pass
                                 
         except Exception as e:
-            print(f"[SEWERAGE DEBUG] Error getting depth from snap match: {e}")
-            
-        return None
+            # print(f"[SEWERAGE DEBUG] Error getting depth from snap match: {e}")
+            pass
 
     # Event filter to catch clicks without stealing the active tool
     def eventFilter(self, obj, ev):
@@ -721,7 +719,7 @@ class ElevationFloaterController(QtCore.QObject):
         if not self._have_upstream:
             # First click: clear any old stored clicks from previous drawing session
             if self._stored_clicks:
-                print(f"[SEWERAGE DEBUG] Clearing {len(self._stored_clicks)} old stored clicks before new drawing")
+                #                 print(f"[SEWERAGE DEBUG] Clearing {len(self._stored_clicks)} old stored clicks before new drawing")
                 self._stored_clicks = []
             
             # Capture current buffer state at start of new drawing session
@@ -729,11 +727,11 @@ class ElevationFloaterController(QtCore.QObject):
                 if self._current_layer and self._current_layer.editBuffer():
                     current_buffer_features = set(self._current_layer.editBuffer().addedFeatures().keys())
                     self._buffer_features_at_session_start = current_buffer_features
-                    print(f"[SEWERAGE DEBUG] Session start - buffer contains: {sorted(current_buffer_features)}")
+                    #                     print(f"[SEWERAGE DEBUG] Session start - buffer contains: {sorted(current_buffer_features)}")
                 else:
                     self._buffer_features_at_session_start = set()
             except Exception as e:
-                print(f"[SEWERAGE DEBUG] Error capturing buffer state: {e}")
+                #                 print(f"[SEWERAGE DEBUG] Error capturing buffer state: {e}")
                 self._buffer_features_at_session_start = set()
             
             # First click: set upstream point and upstream bottom by rule
@@ -748,7 +746,7 @@ class ElevationFloaterController(QtCore.QObject):
                 # Use existing depth instead of initial_depth_m parameter
                 effective_initial_depth = existing_depth
                 self._inherited_depth = existing_depth
-                print(f"[SEWERAGE DEBUG] Using existing depth {existing_depth:.3f}m instead of initial depth {self.initial_depth_m:.3f}m")
+                #                 print(f"[SEWERAGE DEBUG] Using existing depth {existing_depth:.3f}m instead of initial depth {self.initial_depth_m:.3f}m")
             else:
                 self._inherited_depth = None
             
@@ -777,7 +775,7 @@ class ElevationFloaterController(QtCore.QObject):
                 'timestamp': current_time
             }
             self._stored_clicks.append(click_data)
-            print(f"[SEWERAGE DEBUG] Stored first click: {map_pt.x():.2f}, {map_pt.y():.2f}, elev={self._upstream_ground_elev}, depth={upstream_depth}")
+            #             print(f"[SEWERAGE DEBUG] Stored first click: {map_pt.x():.2f}, {map_pt.y():.2f}, elev={self._upstream_ground_elev}, depth={upstream_depth}")
         else:
             # Second and subsequent clicks: finalize current downstream as new upstream
             if self._upstream_bottom_elev is None:
@@ -806,7 +804,7 @@ class ElevationFloaterController(QtCore.QObject):
                     'timestamp': current_time
                 }
                 self._stored_clicks.append(click_data)
-                print(f"[SEWERAGE DEBUG] Stored click {len(self._stored_clicks)}: {map_pt.x():.2f}, {map_pt.y():.2f}, elev={elev}, depth={downstream_depth}")
+                #                 print(f"[SEWERAGE DEBUG] Stored click {len(self._stored_clicks)}: {map_pt.x():.2f}, {map_pt.y():.2f}, elev={elev}, depth={downstream_depth}")
                 
                 # Now set new upstream for next segment
                 self._upstream_map_point = QgsPointXY(map_pt)
@@ -823,7 +821,7 @@ class ElevationFloaterController(QtCore.QObject):
         self._inherited_depth = None
         self._current_snap_depth = None
         # DON'T clear stored clicks here - let red_basica workflow complete first
-        print("[SEWERAGE DEBUG] Reset sequence (right-click) but keeping stored clicks for red_basica workflow")
+        #         print("[SEWERAGE DEBUG] Reset sequence (right-click) but keeping stored clicks for red_basica workflow")
 
     # External API --------------------------------------------------------------
     def set_measure_crs(self, crs: QgsCoordinateReferenceSystem):
@@ -873,12 +871,13 @@ class ElevationFloaterController(QtCore.QObject):
                     # Track recent feature operations for red_basica detection
                     self._recent_deletions = []
                     self._pending_additions = []
-                    print(f"[SEWERAGE DEBUG] Connected signals to layer: {layer.name()} (ID: {layer.id()})")
+                    #                     print(f"[SEWERAGE DEBUG] Connected signals to layer: {layer.name()} (ID: {layer.id()})")
                 except Exception as e:
-                    print(f"[SEWERAGE DEBUG] Failed to connect signals: {e}")
+                    #                     print(f"[SEWERAGE DEBUG] Failed to connect signals: {e}")
                     pass
             else:
-                print("[SEWERAGE DEBUG] No layer provided for signal connection")
+                pass
+                #                 print("[SEWERAGE DEBUG] No layer provided for signal connection")
         except Exception:
             self._gate_layer_id = None
             self._current_layer = None
@@ -917,7 +916,7 @@ class ElevationFloaterController(QtCore.QObject):
         """Track deletions - red_basica deletes multi-vertex then adds 2-vertex segments"""
         import time
         try:
-            print(f"[SEWERAGE DEBUG] Features deleted: {list(fids)}")
+            #             print(f"[SEWERAGE DEBUG] Features deleted: {list(fids)}")
             self._recent_deletions.append({
                 'fids': list(fids),
                 'timestamp': time.time()
@@ -926,7 +925,7 @@ class ElevationFloaterController(QtCore.QObject):
             current_time = time.time()
             self._recent_deletions = [d for d in self._recent_deletions if current_time - d['timestamp'] < 5.0]
         except Exception as e:
-            print(f"[SEWERAGE DEBUG] Error in _on_features_deleted: {e}")
+            #             print(f"[SEWERAGE DEBUG] Error in _on_features_deleted: {e}")
             pass
 
     def _on_feature_added(self, fid):
@@ -934,17 +933,17 @@ class ElevationFloaterController(QtCore.QObject):
         import time
         try:
             current_time = time.time()
-            print(f"[SEWERAGE DEBUG] Feature added: {fid}")
-            print(f"[SEWERAGE DEBUG] Stored clicks count: {len(self._stored_clicks)}")
-            print(f"[SEWERAGE DEBUG] Recent deletions: {len(self._recent_deletions)}")
+            #             print(f"[SEWERAGE DEBUG] Feature added: {fid}")
+            #             print(f"[SEWERAGE DEBUG] Stored clicks count: {len(self._stored_clicks)}")
+            #             print(f"[SEWERAGE DEBUG] Recent deletions: {len(self._recent_deletions)}")
             
             # Simplified detection: if we have stored clicks and this is a negative ID, process it
             # The key insight: red_basica always creates negative IDs, so any negative ID + stored clicks = process
             should_process = self._stored_clicks and fid < 0
-            print(f"[SEWERAGE DEBUG] Should process: stored_clicks={len(self._stored_clicks)}, negative_id={fid < 0}")
+            #             print(f"[SEWERAGE DEBUG] Should process: stored_clicks={len(self._stored_clicks)}, negative_id={fid < 0}")
             
             if should_process:
-                print(f"[SEWERAGE DEBUG] Triggering segment processing for fid: {fid}")
+                #                 print(f"[SEWERAGE DEBUG] Triggering segment processing for fid: {fid}")
                 # Add to pending list and wait for more features to be added
                 if not hasattr(self, '_pending_fids'):
                     self._pending_fids = []
@@ -954,50 +953,53 @@ class ElevationFloaterController(QtCore.QObject):
                 QtCore.QTimer.singleShot(500, lambda: self._process_pending_segments())
             else:
                 if not self._stored_clicks:
-                    print("[SEWERAGE DEBUG] No stored clicks - skipping processing")
+                    pass
+                    #                     print("[SEWERAGE DEBUG] No stored clicks - skipping processing")
                 elif fid >= 0:
-                    print("[SEWERAGE DEBUG] Positive feature ID - likely not red_basica - skipping processing")
+                    pass
+                    #                     print("[SEWERAGE DEBUG] Positive feature ID - likely not red_basica - skipping processing")
         except Exception as e:
-            print(f"[SEWERAGE DEBUG] Error in _on_feature_added: {e}")
+            #             print(f"[SEWERAGE DEBUG] Error in _on_feature_added: {e}")
             pass
 
     def _process_pending_segments(self):
         """Process all pending segments after collecting multiple feature additions"""
         if hasattr(self, '_pending_fids'):
-            print(f"[SEWERAGE DEBUG] Processing {len(self._pending_fids)} pending segments")
+            #             print(f"[SEWERAGE DEBUG] Processing {len(self._pending_fids)} pending segments")
             self._process_new_segments(self._pending_fids)
             self._pending_fids = []  # Clear pending list
         else:
-            print("[SEWERAGE DEBUG] No pending segments to process")
+            pass
+            #             print("[SEWERAGE DEBUG] No pending segments to process")
 
     def _process_new_segments(self, recent_fids):
         """Match newly added 2-vertex segments to stored clicks and write attributes"""
-        print(f"[SEWERAGE DEBUG] Processing new segments, recent_fids: {recent_fids}")
-        print(f"[SEWERAGE DEBUG] Has stored clicks: {bool(self._stored_clicks)}")
-        print(f"[SEWERAGE DEBUG] Has current layer: {bool(self._current_layer)}")
+        #         print(f"[SEWERAGE DEBUG] Processing new segments, recent_fids: {recent_fids}")
+        #         print(f"[SEWERAGE DEBUG] Has stored clicks: {bool(self._stored_clicks)}")
+        #         print(f"[SEWERAGE DEBUG] Has current layer: {bool(self._current_layer)}")
         
         if not self._stored_clicks or not self._current_layer:
-            print("[SEWERAGE DEBUG] Early return - missing clicks or layer")
+            #             print("[SEWERAGE DEBUG] Early return - missing clicks or layer")
             return
         
         # Keep a copy of current clicks for downstream recalculation
         stored_clicks_copy = list(self._stored_clicks)
 
         try:
-            print(f"[SEWERAGE DEBUG] Layer is editable: {self._current_layer.isEditable()}")
-            print(f"[SEWERAGE DEBUG] Layer feature count: {self._current_layer.featureCount()}")
+            #             print(f"[SEWERAGE DEBUG] Layer is editable: {self._current_layer.isEditable()}")
+            #             print(f"[SEWERAGE DEBUG] Layer feature count: {self._current_layer.featureCount()}")
             
             # Get features from edit buffer (for newly added features with negative IDs)
             edit_buffer = self._current_layer.editBuffer()
             if edit_buffer:
                 added_features = edit_buffer.addedFeatures()
-                print(f"[SEWERAGE DEBUG] Edit buffer has {len(added_features)} added features")
-                print(f"[SEWERAGE DEBUG] Added feature IDs: {list(added_features.keys())}")
+                #                 print(f"[SEWERAGE DEBUG] Edit buffer has {len(added_features)} added features")
+                #                 print(f"[SEWERAGE DEBUG] Added feature IDs: {list(added_features.keys())}")
                 
                 # Filter to only NEW features (not in buffer at session start)
                 new_feature_ids = set(added_features.keys()) - self._buffer_features_at_session_start
-                print(f"[SEWERAGE DEBUG] Buffer at session start: {sorted(self._buffer_features_at_session_start)}")
-                print(f"[SEWERAGE DEBUG] NEW features for this session: {sorted(new_feature_ids)}")
+                #                 print(f"[SEWERAGE DEBUG] Buffer at session start: {sorted(self._buffer_features_at_session_start)}")
+                #                 print(f"[SEWERAGE DEBUG] NEW features for this session: {sorted(new_feature_ids)}")
                 
                 # Use only new features from edit buffer
                 candidate_features = []
@@ -1015,20 +1017,20 @@ class ElevationFloaterController(QtCore.QObject):
                             lines = geom.asMultiPolyline()
                             if lines and len(lines[0]) == 2:
                                 candidate_features.append((feat, lines[0]))
-                                print(f"[SEWERAGE DEBUG] Added NEW multipart 2-vertex feature: {feat.id()}")
+                                #                                 print(f"[SEWERAGE DEBUG] Added NEW multipart 2-vertex feature: {feat.id()}")
                         else:
                             line = geom.asPolyline()
                             if len(line) == 2:
                                 candidate_features.append((feat, line))
-                                print(f"[SEWERAGE DEBUG] Added NEW single 2-vertex feature: {feat.id()}, coords: {[(p.x(), p.y()) for p in line]}")
+                                #                                 print(f"[SEWERAGE DEBUG] Added NEW single 2-vertex feature: {feat.id()}, coords: {[(p.x(), p.y()) for p in line]}")
                     except Exception as e:
-                        print(f"[SEWERAGE DEBUG] Error processing NEW buffer feature {feat.id()}: {e}")
+                        #                         print(f"[SEWERAGE DEBUG] Error processing NEW buffer feature {feat.id()}: {e}")
                         continue
             else:
-                print("[SEWERAGE DEBUG] No edit buffer available, falling back to layer features")
+                #                 print("[SEWERAGE DEBUG] No edit buffer available, falling back to layer features")
                 # Fallback to regular layer features
                 all_features = list(self._current_layer.getFeatures())
-                print(f"[SEWERAGE DEBUG] Retrieved {len(all_features)} features from layer")
+                #                 print(f"[SEWERAGE DEBUG] Retrieved {len(all_features)} features from layer")
                 
                 candidate_features = []
                 for feat in all_features:
@@ -1042,20 +1044,21 @@ class ElevationFloaterController(QtCore.QObject):
                             lines = geom.asMultiPolyline()
                             if lines and len(lines[0]) == 2:
                                 candidate_features.append((feat, lines[0]))
-                                print(f"[SEWERAGE DEBUG] Added multipart 2-vertex feature: {feat.id()}")
+                                #                                 print(f"[SEWERAGE DEBUG] Added multipart 2-vertex feature: {feat.id()}")
                         else:
                             line = geom.asPolyline()
                             if len(line) == 2:
                                 candidate_features.append((feat, line))
-                                print(f"[SEWERAGE DEBUG] Added single 2-vertex feature: {feat.id()}, coords: {[(p.x(), p.y()) for p in line]}")
+                                #                                 print(f"[SEWERAGE DEBUG] Added single 2-vertex feature: {feat.id()}, coords: {[(p.x(), p.y()) for p in line]}")
                     except Exception as e:
-                        print(f"[SEWERAGE DEBUG] Error processing feature {feat.id()}: {e}")
+                        #                         print(f"[SEWERAGE DEBUG] Error processing feature {feat.id()}: {e}")
                         continue
             
-            print(f"[SEWERAGE DEBUG] Found {len(candidate_features)} NEW candidate 2-vertex features")
+            #             
+            #             print(f"[SEWERAGE DEBUG] Found {len(candidate_features)} NEW candidate 2-vertex features")
             
             if not candidate_features:
-                print("[SEWERAGE DEBUG] No 2-vertex candidate features found")
+                #                 print("[SEWERAGE DEBUG] No 2-vertex candidate features found")
                 return
             
             # Match segments to click pairs
@@ -1068,43 +1071,47 @@ class ElevationFloaterController(QtCore.QObject):
                     end_point = end_click.get('map_point')
                     end_depth = end_click.get('depth')
                     if end_point is not None and end_depth is not None:
-                        print(f"[SEWERAGE DEBUG] Trigger downstream recalculation from end point ({end_point.x():.3f}, {end_point.y():.3f}) with depth {end_depth:.3f}")
+                        #                         print(f"[SEWERAGE DEBUG] Trigger downstream recalculation from end point ({end_point.x():.3f}, {end_point.y():.3f}) with depth {end_depth:.3f}")
                         # Exclude new features from traversal (use non-negative IDs if available)
                         exclude_ids = set([feat.id() for feat, _ in candidate_features])
                         self._recalculate_downstream_from_connection(end_point, float(end_depth), exclude_ids)
                 else:
-                    print("[SEWERAGE DEBUG] Skipping downstream recalculation: no matches found or no end point/depth")
+                    pass
+                    #                     print("[SEWERAGE DEBUG] Skipping downstream recalculation: no matches found or no end point/depth")
             except Exception as e:
-                print(f"[SEWERAGE DEBUG] Downstream recalculation error: {e}")
+                pass
+                #                 print(f"[SEWERAGE DEBUG] Downstream recalculation error: {e}")
             
-            print(f"[SEWERAGE DEBUG] Total matches found: {matches_found}")
+            #             
+            #             print(f"[SEWERAGE DEBUG] Total matches found: {matches_found}")
             
             # Always clear stored clicks at end of processing cycle
             self._stored_clicks = []
-            print("[SEWERAGE DEBUG] Cleared stored clicks after processing cycle")
+            #             print("[SEWERAGE DEBUG] Cleared stored clicks after processing cycle")
             
         except Exception as e:
-            print(f"[SEWERAGE DEBUG] Error in _process_new_segments: {e}")
+            #             print(f"[SEWERAGE DEBUG] Error in _process_new_segments: {e}")
             pass
 
     def _match_and_write_attributes(self, candidate_features):
         """Match segments to stored clicks and write elevation/depth attributes"""
-        print(f"[SEWERAGE DEBUG] Matching attributes, stored clicks: {len(self._stored_clicks)}")
+        #         print(f"[SEWERAGE DEBUG] Matching attributes, stored clicks: {len(self._stored_clicks)}")
         
         if not self._stored_clicks or len(self._stored_clicks) < 2:
-            print(f"[SEWERAGE DEBUG] Not enough stored clicks: {len(self._stored_clicks)}")
+            #             print(f"[SEWERAGE DEBUG] Not enough stored clicks: {len(self._stored_clicks)}")
             return 0
         
         # Debug: Print stored clicks
         for i, click in enumerate(self._stored_clicks):
-            print(f"[SEWERAGE DEBUG] Click {i}: {click['map_point'].x():.2f}, {click['map_point'].y():.2f}, elev={click['ground_elev']}, depth={click['depth']}")
+            pass
+            #             print(f"[SEWERAGE DEBUG] Click {i}: {click['map_point'].x():.2f}, {click['map_point'].y():.2f}, elev={click['ground_elev']}, depth={click['depth']}")
         
         # Get attribute field mapping from dock widget
         field_mapping = self._get_field_mapping()
-        print(f"[SEWERAGE DEBUG] Field mapping: {field_mapping}")
+        #         print(f"[SEWERAGE DEBUG] Field mapping: {field_mapping}")
         
         if not field_mapping:
-            print("[SEWERAGE DEBUG] No field mapping available")
+            #             print("[SEWERAGE DEBUG] No field mapping available")
             return 0
         
         try:
@@ -1112,26 +1119,28 @@ class ElevationFloaterController(QtCore.QObject):
             # Features are created in order: -10, -11, -12, -13, -14...
             # We want them in reverse order of ID (creation order)
             sorted_features = sorted(candidate_features, key=lambda x: x[0].id(), reverse=True)
-            print(f"[SEWERAGE DEBUG] Sorted features by creation order: {[f[0].id() for f in sorted_features]}")
+            #             print(f"[SEWERAGE DEBUG] Sorted features by creation order: {[f[0].id() for f in sorted_features]}")
             
             matches_found = 0
             expected_segments = len(self._stored_clicks) - 1
             
-            print(f"[SEWERAGE DEBUG] Expected {expected_segments} segments from {len(self._stored_clicks)} clicks")
+            #             
+            #             print(f"[SEWERAGE DEBUG] Expected {expected_segments} segments from {len(self._stored_clicks)} clicks")
             
             # Match by sequential order: Feature 0 gets clicks 0-1, Feature 1 gets clicks 1-2, etc.
             for segment_index, (feat, line_coords) in enumerate(sorted_features):
                 if segment_index >= expected_segments:
-                    print(f"[SEWERAGE DEBUG] Segment {segment_index} exceeds expected segments ({expected_segments})")
+                    #                     print(f"[SEWERAGE DEBUG] Segment {segment_index} exceeds expected segments ({expected_segments})")
                     break
                 
                 p1, p2 = line_coords[0], line_coords[1]
                 click1 = self._stored_clicks[segment_index]
                 click2 = self._stored_clicks[segment_index + 1]
                 
-                print(f"[SEWERAGE DEBUG] Sequential match - Feature {feat.id()} (segment {segment_index}): clicks {segment_index}-{segment_index+1}")
-                print(f"[SEWERAGE DEBUG] Feature coords: p1=({p1.x():.2f}, {p1.y():.2f}), p2=({p2.x():.2f}, {p2.y():.2f})")
-                print(f"[SEWERAGE DEBUG] Click coords: c1=({click1['map_point'].x():.2f}, {click1['map_point'].y():.2f}), c2=({click2['map_point'].x():.2f}, {click2['map_point'].y():.2f})")
+                #                 
+                #                 print(f"[SEWERAGE DEBUG] Sequential match - Feature {feat.id()} (segment {segment_index}): clicks {segment_index}-{segment_index+1}")
+                #                 print(f"[SEWERAGE DEBUG] Feature coords: p1=({p1.x():.2f}, {p1.y():.2f}), p2=({p2.x():.2f}, {p2.y():.2f})")
+                #                 print(f"[SEWERAGE DEBUG] Click coords: c1=({click1['map_point'].x():.2f}, {click1['map_point'].y():.2f}), c2=({click2['map_point'].x():.2f}, {click2['map_point'].y():.2f})")
                 
                 # Determine orientation by checking which click is closer to which endpoint
                 d1_to_c1 = self._point_distance(p1, click1['map_point'])
@@ -1146,20 +1155,23 @@ class ElevationFloaterController(QtCore.QObject):
                     p1_data, p2_data = click2, click1
                     order_desc = "reversed"
                 
-                print(f"[SEWERAGE DEBUG] Orientation: {order_desc} (p1-to-c1: {d1_to_c1:.2f}, p1-to-c2: {d1_to_c2:.2f})")
+                #                 
+                #                 print(f"[SEWERAGE DEBUG] Orientation: {order_desc} (p1-to-c1: {d1_to_c1:.2f}, p1-to-c2: {d1_to_c2:.2f})")
                 
                 # Write attributes
                 success = self._write_segment_attributes(feat, p1_data, p2_data, field_mapping)
                 if success:
                     matches_found += 1
-                    print(f"[SEWERAGE DEBUG] Successfully wrote attributes for feature {feat.id()}")
+                    #                     print(f"[SEWERAGE DEBUG] Successfully wrote attributes for feature {feat.id()}")
                 else:
-                    print(f"[SEWERAGE DEBUG] Failed to write attributes for feature {feat.id()}")
+                    pass
+                    #                     print(f"[SEWERAGE DEBUG] Failed to write attributes for feature {feat.id()}")
             
-            print(f"[SEWERAGE DEBUG] Total matches found: {matches_found}")
+            #             
+            #             print(f"[SEWERAGE DEBUG] Total matches found: {matches_found}")
             return matches_found
         except Exception as e:
-            print(f"[SEWERAGE DEBUG] Error in _match_and_write_attributes: {e}")
+            #             print(f"[SEWERAGE DEBUG] Error in _match_and_write_attributes: {e}")
             return 0
 
     # --- Downstream recalculation ---------------------------------------------
@@ -1178,7 +1190,7 @@ class ElevationFloaterController(QtCore.QObject):
             p1h = field_mapping.get('p1_h', -1)
             p2h = field_mapping.get('p2_h', -1)
             if min(p1e, p2e, p1h, p2h) < 0:
-                print("[SEWERAGE DEBUG] Missing required fields for downstream recalc")
+                #                 print("[SEWERAGE DEBUG] Missing required fields for downstream recalc")
                 return
 
             # Build index of features by their upstream (p1) coordinate
@@ -1210,7 +1222,7 @@ class ElevationFloaterController(QtCore.QObject):
 
             start_key = key_from_point(connection_point)
             if start_key not in p1_index:
-                print("[SEWERAGE DEBUG] No existing segment with this point as upstream (p1); skipping recalc")
+                #                 print("[SEWERAGE DEBUG] No existing segment with this point as upstream (p1); skipping recalc")
                 return
 
             # Use first matching segment (if multiple, choose smallest ID)
@@ -1244,7 +1256,7 @@ class ElevationFloaterController(QtCore.QObject):
                     p1_ground = self._interpolate_elevation_from_dem(QgsPointXY(current_pts[0]))
                     if p1_ground is not None:
                         p1_interpolated = True
-                        print(f"[SEWERAGE DEBUG] Interpolated P1 elevation: {p1_ground:.3f}m for feature {current_feature.id()}")
+                        #                         print(f"[SEWERAGE DEBUG] Interpolated P1 elevation: {p1_ground:.3f}m for feature {current_feature.id()}")
                         # Write interpolated value back to feature
                         self._current_layer.changeAttributeValue(current_feature.id(), p1e, round(p1_ground, 3))
 
@@ -1252,7 +1264,7 @@ class ElevationFloaterController(QtCore.QObject):
                     p2_ground = self._interpolate_elevation_from_dem(QgsPointXY(current_pts[-1]))
                     if p2_ground is not None:
                         p2_interpolated = True
-                        print(f"[SEWERAGE DEBUG] Interpolated P2 elevation: {p2_ground:.3f}m for feature {current_feature.id()}")
+                        #                         print(f"[SEWERAGE DEBUG] Interpolated P2 elevation: {p2_ground:.3f}m for feature {current_feature.id()}")
                         # Write interpolated value back to feature
                         self._current_layer.changeAttributeValue(current_feature.id(), p2e, round(p2_ground, 3))
 
@@ -1273,7 +1285,7 @@ class ElevationFloaterController(QtCore.QObject):
 
                 # Compute downstream bottom and depth
                 if p1_ground is None or p2_ground is None:
-                    print(f"[SEWERAGE DEBUG] Unable to get ground elevation on feature {current_feature.id()} - neither stored nor interpolatable from DEM, stopping")
+                    #                     print(f"[SEWERAGE DEBUG] Unable to get ground elevation on feature {current_feature.id()} - neither stored nor interpolatable from DEM, stopping")
                     break
 
                 upstream_bottom = p1_ground - effective_p1_depth
@@ -1303,30 +1315,32 @@ class ElevationFloaterController(QtCore.QObject):
                 current_feature, current_pts = next_candidates[0]
                 upstream_depth = downstream_depth
 
-            print("[SEWERAGE DEBUG] Downstream recalculation complete")
+            # 
+            #             print("[SEWERAGE DEBUG] Downstream recalculation complete")
         except Exception as e:
-            print(f"[SEWERAGE DEBUG] Error in downstream recalculation: {e}")
+            pass
+            #             print(f"[SEWERAGE DEBUG] Error in downstream recalculation: {e}")
 
     def _interpolate_elevation_from_dem(self, point: QgsPointXY) -> Optional[float]:
         """Interpolate elevation from DEM at given point. Returns None if unavailable."""
         try:
             # Guard against removed raster providers
             if not self._interp or not self._to_raster:
-                print("[SEWERAGE DEBUG] No DEM interpolator available for elevation interpolation")
+                #                 print("[SEWERAGE DEBUG] No DEM interpolator available for elevation interpolation")
                 return None
             
             # Check if provider is still valid
             try:
                 _ = self._interp.dp
             except Exception:
-                print("[SEWERAGE DEBUG] DEM provider has been removed, cannot interpolate")
+                #                 print("[SEWERAGE DEBUG] DEM provider has been removed, cannot interpolate")
                 return None
             
             # Transform point to raster CRS
             try:
                 lyr_pt = self._to_raster.transform(point)
             except Exception as e:
-                print(f"[SEWERAGE DEBUG] CRS transform error during elevation interpolation: {e}")
+                #                 print(f"[SEWERAGE DEBUG] CRS transform error during elevation interpolation: {e}")
                 return None
             
             # Interpolate elevation
@@ -1335,14 +1349,14 @@ class ElevationFloaterController(QtCore.QObject):
                 if elev is not None:
                     return float(elev)
                 else:
-                    print(f"[SEWERAGE DEBUG] DEM interpolation returned no data at point ({point.x():.3f}, {point.y():.3f})")
+                    #                     print(f"[SEWERAGE DEBUG] DEM interpolation returned no data at point ({point.x():.3f}, {point.y():.3f})")
                     return None
             except Exception as e:
-                print(f"[SEWERAGE DEBUG] DEM interpolation error: {e}")
+                #                 print(f"[SEWERAGE DEBUG] DEM interpolation error: {e}")
                 return None
                 
         except Exception as e:
-            print(f"[SEWERAGE DEBUG] Error in _interpolate_elevation_from_dem: {e}")
+            #             print(f"[SEWERAGE DEBUG] Error in _interpolate_elevation_from_dem: {e}")
             return None
 
     def _get_field_mapping(self):
@@ -1377,13 +1391,13 @@ class ElevationFloaterController(QtCore.QObject):
     def _write_segment_attributes(self, feature, p1_data, p2_data, field_mapping):
         """Write elevation and depth values to segment attributes"""
         try:
-            print(f"[SEWERAGE DEBUG] Writing attributes to feature {feature.id()}")
-            print(f"[SEWERAGE DEBUG] Layer editable: {self._current_layer.isEditable()}")
-            print(f"[SEWERAGE DEBUG] p1_data: elev={p1_data['ground_elev']}, depth={p1_data['depth']}")
-            print(f"[SEWERAGE DEBUG] p2_data: elev={p2_data['ground_elev']}, depth={p2_data['depth']}")
+            #             print(f"[SEWERAGE DEBUG] Writing attributes to feature {feature.id()}")
+            #             print(f"[SEWERAGE DEBUG] Layer editable: {self._current_layer.isEditable()}")
+            #             print(f"[SEWERAGE DEBUG] p1_data: elev={p1_data['ground_elev']}, depth={p1_data['depth']}")
+            #             print(f"[SEWERAGE DEBUG] p2_data: elev={p2_data['ground_elev']}, depth={p2_data['depth']}")
             
             if not self._current_layer.isEditable():
-                print("[SEWERAGE DEBUG] Starting edit session")
+                #                 print("[SEWERAGE DEBUG] Starting edit session")
                 self._current_layer.startEditing()
             
             changes_made = 0
@@ -1392,45 +1406,50 @@ class ElevationFloaterController(QtCore.QObject):
             if field_mapping['p1_elev'] >= 0 and p1_data['ground_elev'] is not None:
                 rounded_elev = round(float(p1_data['ground_elev']), 2)
                 success = self._current_layer.changeAttributeValue(feature.id(), field_mapping['p1_elev'], rounded_elev)
-                print(f"[SEWERAGE DEBUG] p1_elev write success: {success} (field index: {field_mapping['p1_elev']}, value: {rounded_elev})")
+                #                 print(f"[SEWERAGE DEBUG] p1_elev write success: {success} (field index: {field_mapping['p1_elev']}, value: {rounded_elev})")
                 if success:
                     changes_made += 1
             else:
-                print(f"[SEWERAGE DEBUG] Skipping p1_elev: field_index={field_mapping['p1_elev']}, value={p1_data['ground_elev']}")
+                pass
+                #                 print(f"[SEWERAGE DEBUG] Skipping p1_elev: field_index={field_mapping['p1_elev']}, value={p1_data['ground_elev']}")
                 
             if field_mapping['p1_h'] >= 0 and p1_data['depth'] is not None:
                 rounded_depth = round(float(p1_data['depth']), 2)
                 success = self._current_layer.changeAttributeValue(feature.id(), field_mapping['p1_h'], rounded_depth)
-                print(f"[SEWERAGE DEBUG] p1_h write success: {success} (field index: {field_mapping['p1_h']}, value: {rounded_depth})")
+                #                 print(f"[SEWERAGE DEBUG] p1_h write success: {success} (field index: {field_mapping['p1_h']}, value: {rounded_depth})")
                 if success:
                     changes_made += 1
             else:
-                print(f"[SEWERAGE DEBUG] Skipping p1_h: field_index={field_mapping['p1_h']}, value={p1_data['depth']}")
+                pass
+                #                 print(f"[SEWERAGE DEBUG] Skipping p1_h: field_index={field_mapping['p1_h']}, value={p1_data['depth']}")
             
             # Write p2 values (rounded to 2 decimals)  
             if field_mapping['p2_elev'] >= 0 and p2_data['ground_elev'] is not None:
                 rounded_elev = round(float(p2_data['ground_elev']), 2)
                 success = self._current_layer.changeAttributeValue(feature.id(), field_mapping['p2_elev'], rounded_elev)
-                print(f"[SEWERAGE DEBUG] p2_elev write success: {success} (field index: {field_mapping['p2_elev']}, value: {rounded_elev})")
+                #                 print(f"[SEWERAGE DEBUG] p2_elev write success: {success} (field index: {field_mapping['p2_elev']}, value: {rounded_elev})")
                 if success:
                     changes_made += 1
             else:
-                print(f"[SEWERAGE DEBUG] Skipping p2_elev: field_index={field_mapping['p2_elev']}, value={p2_data['ground_elev']}")
+                pass
+                #                 print(f"[SEWERAGE DEBUG] Skipping p2_elev: field_index={field_mapping['p2_elev']}, value={p2_data['ground_elev']}")
                 
             if field_mapping['p2_h'] >= 0 and p2_data['depth'] is not None:
                 rounded_depth = round(float(p2_data['depth']), 2)
                 success = self._current_layer.changeAttributeValue(feature.id(), field_mapping['p2_h'], rounded_depth)
-                print(f"[SEWERAGE DEBUG] p2_h write success: {success} (field index: {field_mapping['p2_h']}, value: {rounded_depth})")
+                #                 print(f"[SEWERAGE DEBUG] p2_h write success: {success} (field index: {field_mapping['p2_h']}, value: {rounded_depth})")
                 if success:
                     changes_made += 1
             else:
-                print(f"[SEWERAGE DEBUG] Skipping p2_h: field_index={field_mapping['p2_h']}, value={p2_data['depth']}")
+                pass
+                #                 print(f"[SEWERAGE DEBUG] Skipping p2_h: field_index={field_mapping['p2_h']}, value={p2_data['depth']}")
             
-            print(f"[SEWERAGE DEBUG] Total changes made: {changes_made}")
+            #             
+            #             print(f"[SEWERAGE DEBUG] Total changes made: {changes_made}")
             return changes_made > 0
                 
         except Exception as e:
-            print(f"[SEWERAGE DEBUG] Error in _write_segment_attributes: {e}")
+            #             print(f"[SEWERAGE DEBUG] Error in _write_segment_attributes: {e}")
             return False
 
     def _point_distance(self, qgs_point, qgs_point2):
@@ -1450,12 +1469,12 @@ class ElevationFloaterController(QtCore.QObject):
     def clear_stored_clicks(self):
         """Clear stored clicks manually"""
         self._stored_clicks = []
-        print("[SEWERAGE DEBUG] Manually cleared stored clicks")
+        #         print("[SEWERAGE DEBUG] Manually cleared stored clicks")
     
     def force_clear_on_new_drawing(self):
         """Clear stored clicks when starting a completely new drawing session"""
         if self._stored_clicks:
-            print(f"[SEWERAGE DEBUG] Force clearing {len(self._stored_clicks)} stored clicks for new drawing")
+            #             print(f"[SEWERAGE DEBUG] Force clearing {len(self._stored_clicks)} stored clicks for new drawing")
             self._stored_clicks = []
 
 

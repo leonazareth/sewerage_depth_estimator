@@ -46,7 +46,7 @@ class NetworkAnalyzer:
         p1_elev_idx = field_mapping['p1_elev']
         p2_elev_idx = field_mapping['p2_elev']
         
-        DebugLogger.log("Building network topology...")
+        DebugLogger.log("Building network topology...", "network_tree")
         
         for i, feature in enumerate(features):
             segment_data = self._extract_segment_data(feature, i, p1_elev_idx, p2_elev_idx)
@@ -133,7 +133,7 @@ class NetworkAnalyzer:
             has_upstream = any(not is_upstream for _, is_upstream in node_connections.get(p1_key, []))
             if not has_upstream:
                 roots.append(i)
-                DebugLogger.log(f"Root segment {i}: Feature {segment['feature'].id()}")
+                DebugLogger.log(f"Root segment {i}: Feature {segment['feature'].id()}", "network_tree")
         return roots
     
     def find_outlet_segments(self, segments: List[dict],
@@ -161,7 +161,7 @@ class NetworkAnalyzer:
             True if successful
         """
         try:
-            DebugLogger.log("Starting network depth calculation...")
+            DebugLogger.log("Starting network depth calculation...", "depth_calc")
             
             # Build topology
             segments, node_connections = self.build_network_topology(features)

@@ -400,7 +400,7 @@ class NetworkTreeMapper:
                             for downstream_seg_id in node.downstream_segments:
                                 if downstream_seg_id not in impacts['downstream_cascade']:
                                     impacts['downstream_cascade'].append(downstream_seg_id)
-                                    DebugLogger.log(f"Added downstream segment {downstream_seg_id} from affected convergent node")
+                                    DebugLogger.log(f"Added downstream segment {downstream_seg_id} from affected convergent node", "depth_calc")
                                     
                                     # Also add the entire downstream chain  
                                     chain = self._get_all_downstream_segments(downstream_seg_id)

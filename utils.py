@@ -20,10 +20,13 @@ class DebugLogger:
     """Centralized debug logging with consistent formatting."""
     
     PREFIX = "[SEWERAGE DEBUG]"
+    ENABLED = False  # Global debug flag - set to True to enable all debug output
     
     @classmethod
     def log(cls, message: str, *args) -> None:
         """Log a debug message with consistent formatting."""
+        if not cls.ENABLED:
+            return
         formatted_msg = message
         if args:
             try:
@@ -35,6 +38,8 @@ class DebugLogger:
     @classmethod
     def log_error(cls, message: str, exception: Optional[Exception] = None) -> None:
         """Log an error message with optional exception details."""
+        if not cls.ENABLED:
+            return
         if exception:
             cls.log(f"ERROR: {message}: {exception}")
         else:
@@ -43,14 +48,29 @@ class DebugLogger:
     @classmethod
     def log_method_entry(cls, method_name: str, *args) -> None:
         """Log entry to a method with arguments."""
+        if not cls.ENABLED:
+            return
         args_str = ", ".join(str(arg) for arg in args) if args else ""
         cls.log(f"-> {method_name}({args_str})")
     
     @classmethod
     def log_feature_processing(cls, feature_id: Any, action: str, **kwargs) -> None:
         """Log feature processing actions."""
+        if not cls.ENABLED:
+            return
         details = ", ".join(f"{k}={v}" for k, v in kwargs.items()) if kwargs else ""
         cls.log(f"Feature {feature_id}: {action} {details}")
+    
+    @classmethod
+    def enable(cls) -> None:
+        """Enable debug logging."""
+        cls.ENABLED = True
+        cls.log("Debug logging enabled")
+    
+    @classmethod
+    def disable(cls) -> None:
+        """Disable debug logging."""
+        cls.ENABLED = False
 
 
 class CoordinateUtils:
