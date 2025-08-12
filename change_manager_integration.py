@@ -6,7 +6,7 @@ with the existing plugin architecture.
 
 from typing import Optional
 from qgis.core import QgsVectorLayer, QgsMapLayer
-from .core.enhanced_change_management_system import EnhancedChangeManagementSystem
+from .core.change_management_system import ChangeManagementSystem
 from .utils import DebugLogger
 
 
@@ -20,7 +20,7 @@ class ChangeManagerIntegration:
     
     def __init__(self):
         """Initialize change manager integration."""
-        self.enhanced_change_manager: Optional[EnhancedChangeManagementSystem] = None
+        self.enhanced_change_manager: Optional[ChangeManagementSystem] = None
         self._current_vector_layer: Optional[QgsVectorLayer] = None
         self._current_dem_layer: Optional[QgsMapLayer] = None
     
@@ -41,9 +41,9 @@ class ChangeManagerIntegration:
             if self.enhanced_change_manager:
                 self.stop_change_monitoring()
             
-            # Create enhanced change manager
-            DebugLogger.log("Initializing Enhanced Change Management System...")
-            self.enhanced_change_manager = EnhancedChangeManagementSystem(vector_layer, dem_layer)
+            # Create change manager
+            DebugLogger.log("Initializing Change Management System...")
+            self.enhanced_change_manager = ChangeManagementSystem(vector_layer, dem_layer)
             
             # Validate network
             validation_results = self.enhanced_change_manager.validate_network()
@@ -52,7 +52,7 @@ class ChangeManagerIntegration:
                 for issue in validation_results['issues']:
                     DebugLogger.log(f"  - {issue['type']}: {issue['description']}")
             
-            DebugLogger.log("Enhanced change management system initialized successfully")
+            DebugLogger.log("Change management system initialized successfully")
             
             self._current_vector_layer = vector_layer
             self._current_dem_layer = dem_layer

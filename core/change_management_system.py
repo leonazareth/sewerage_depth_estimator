@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-Enhanced change management system with tree-based smart cascade algorithm.
+Change management system with tree-based smart cascade algorithm.
 
-This module integrates the enhanced tree-based depth recalculation system
+This module integrates the tree-based depth recalculation system
 with the existing change management infrastructure, providing:
 1. Comprehensive vertex movement handling (upstream and downstream)
 2. Smart cascade logic that respects convergent vertex rules
@@ -17,10 +17,10 @@ from ..data import FieldMapper
 from .geometry_change_detector import GeometryChangeDetector, VertexChange
 from .elevation_updater import ElevationUpdater
 from .depth_calculator import DepthCalculator
-from .enhanced_depth_recalculator import EnhancedDepthRecalculator, SmartCascadeResult
+from .depth_recalculator import DepthRecalculator, SmartCascadeResult
 
 
-class EnhancedChangeManagementSystem:
+class ChangeManagementSystem:
     """
     Enhanced change management system with smart cascade algorithm.
     
@@ -49,7 +49,7 @@ class EnhancedChangeManagementSystem:
         self.geometry_detector = GeometryChangeDetector(vector_layer)
         self.elevation_updater = ElevationUpdater(vector_layer, dem_layer, self.field_mapper) if dem_layer else None
         self.depth_calculator = DepthCalculator()
-        self.enhanced_recalculator = EnhancedDepthRecalculator(
+        self.depth_recalculator = DepthRecalculator(
             vector_layer, self.field_mapper, self.depth_calculator
         )
         
@@ -203,7 +203,7 @@ class EnhancedChangeManagementSystem:
                 # Select specified features
                 self.vector_layer.selectByIds(feature_ids)
             
-            result = self.enhanced_recalculator.validate_network_and_recalculate_all(selected_only)
+            result = self.depth_recalculator.validate_network_and_recalculate_all(selected_only)
             summary = result.get_summary()
             
             # Update statistics
@@ -293,7 +293,7 @@ class EnhancedChangeManagementSystem:
                 DebugLogger.log("Elevation interpolation not available")
             
             # Step 2: Process using enhanced depth recalculator
-            result = self.enhanced_recalculator.recalculate_depths_for_vertex_changes(
+            result = self.depth_recalculator.recalculate_depths_for_vertex_changes(
                 vertex_changes, elevation_updates
             )
             
@@ -313,7 +313,7 @@ class EnhancedChangeManagementSystem:
             DebugLogger.log("Processing parameter change - recalculating network")
             
             # For parameter changes, we need to recalculate the entire network
-            result = self.enhanced_recalculator.recalculate_affected_by_parameter_change(
+            result = self.depth_recalculator.recalculate_affected_by_parameter_change(
                 self._depth_parameters
             )
             
@@ -438,7 +438,7 @@ class EnhancedChangeManagementSystem:
                 'auto_update_enabled': self._auto_update_enabled,
                 'change_stats': self._change_stats.copy(),
                 'depth_parameters': self._depth_parameters.copy(),
-                'processing_stats': self.enhanced_recalculator.get_processing_statistics(),
+                'processing_stats': self.depth_recalculator.get_processing_statistics(),
                 'has_dem_layer': self.dem_layer is not None,
                 'elevation_interpolation_available': (
                     self.elevation_updater is not None and 
@@ -447,7 +447,7 @@ class EnhancedChangeManagementSystem:
             }
             
             # Add network topology stats
-            topology_snapshot = self.enhanced_recalculator.tree_mapper.capture_topology_snapshot()
+            topology_snapshot = self.depth_recalculator.tree_mapper.capture_topology_snapshot()
             stats['network_topology'] = {
                 'total_nodes': len(topology_snapshot.get('nodes', {})),
                 'total_segments': len(topology_snapshot.get('segments', {})),
@@ -487,7 +487,7 @@ class EnhancedChangeManagementSystem:
             'convergent_updates': 0,
             'total_processing_time': 0.0
         }
-        self.enhanced_recalculator.reset_statistics()
+        self.depth_recalculator.reset_statistics()
         DebugLogger.log("Statistics reset")
     
     def cleanup(self) -> None:

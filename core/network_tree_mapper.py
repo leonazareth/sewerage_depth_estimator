@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Enhanced network tree mapper with smart cascade logic for sewerage depth estimation.
+Network tree mapper with smart cascade logic for sewerage depth estimation.
 
 This module implements the tree-based approach for handling vertex movements:
 1. Maps network topology as tree structure
@@ -48,15 +48,16 @@ class TreeTraversalResult(NamedTuple):
     orphaned_segments: List[int]  # Feature IDs of orphaned segments
 
 
-class EnhancedNetworkTreeMapper:
+class NetworkTreeMapper:
     """
-    Enhanced network tree mapper with smart cascade logic.
+    Network tree mapper with smart cascade logic.
     
-    This class implements the comprehensive algorithm for handling vertex movements:
-    - Maps complete network topology as tree structure
-    - Identifies all types of changes (connections, disconnections, movements)
-    - Implements smart cascade that respects convergent vertex rules
-    - Processes changes in proper upstream→downstream order
+    This class provides comprehensive network topology analysis and implements
+    the smart cascade algorithm for efficient depth recalculation:
+    - Maps network as tree structure with proper ordering
+    - Handles convergent vertices with maximum depth rule  
+    - Only propagates depth changes when they would increase depths
+    - Processes changes in correct upstream→downstream order
     """
     
     def __init__(self, layer: QgsVectorLayer, field_mapper: FieldMapper, tolerance: float = 1e-6):

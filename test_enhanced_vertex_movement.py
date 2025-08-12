@@ -9,14 +9,14 @@ both upstream and downstream vertex movements with smart cascade logic.
 from typing import List, Dict
 from qgis.core import QgsPointXY
 from core.geometry_change_detector import VertexChange
-from core.enhanced_change_management_system import EnhancedChangeManagementSystem
+from core.change_management_system import ChangeManagementSystem
 from utils import DebugLogger
 
 
 class VertexMovementTestSuite:
     """Test suite for enhanced vertex movement handling."""
     
-    def __init__(self, change_management_system: EnhancedChangeManagementSystem):
+    def __init__(self, change_management_system: ChangeManagementSystem):
         """
         Initialize test suite.
         

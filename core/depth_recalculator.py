@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Enhanced depth recalculator with smart cascade logic.
+Depth recalculator with smart cascade logic.
 
 This module implements the smart cascade algorithm for depth recalculation:
 1. Uses tree-based network analysis
@@ -15,7 +15,7 @@ from qgis.core import QgsVectorLayer
 from ..utils import DebugLogger
 from ..data import FieldMapper
 from .depth_calculator import DepthCalculator
-from .enhanced_network_tree_mapper import EnhancedNetworkTreeMapper
+from .network_tree_mapper import NetworkTreeMapper
 from .geometry_change_detector import VertexChange
 
 
@@ -43,9 +43,9 @@ class SmartCascadeResult:
         }
 
 
-class EnhancedDepthRecalculator:
+class DepthRecalculator:
     """
-    Enhanced depth recalculator with smart cascade logic.
+    Depth recalculator with smart cascade logic.
     
     This class implements the comprehensive tree-based algorithm for depth recalculation:
     - Analyzes complete network topology
@@ -71,8 +71,8 @@ class EnhancedDepthRecalculator:
         self.depth_calculator = depth_calculator
         self.tolerance = tolerance
         
-        # Enhanced tree mapper for topology analysis
-        self.tree_mapper = EnhancedNetworkTreeMapper(layer, field_mapper, tolerance)
+        # Network tree mapper for topology analysis
+        self.tree_mapper = NetworkTreeMapper(layer, field_mapper, tolerance)
         
         # Processing parameters
         self.depth_increase_threshold = 0.01  # 1cm threshold for cascade decisions
