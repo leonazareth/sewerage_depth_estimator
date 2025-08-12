@@ -1233,6 +1233,25 @@ class ElevationFloaterController(QtCore.QObject):
                 except Exception:
                     p1_ground = p2_ground = None
 
+                # Interpolate missing elevations from DEM
+                p1_interpolated = False
+                p2_interpolated = False
+                if p1_ground is None:
+                    p1_ground = self._interpolate_elevation_from_dem(QgsPointXY(current_pts[0]))
+                    if p1_ground is not None:
+                        p1_interpolated = True
+                        print(f"[SEWERAGE DEBUG] Interpolated P1 elevation: {p1_ground:.3f}m for feature {current_feature.id()}")
+                        # Write interpolated value back to feature
+                        self._current_layer.changeAttributeValue(current_feature.id(), p1e, round(p1_ground, 3))
+
+                if p2_ground is None:
+                    p2_ground = self._interpolate_elevation_from_dem(QgsPointXY(current_pts[-1]))
+                    if p2_ground is not None:
+                        p2_interpolated = True
+                        print(f"[SEWERAGE DEBUG] Interpolated P2 elevation: {p2_ground:.3f}m for feature {current_feature.id()}")
+                        # Write interpolated value back to feature
+                        self._current_layer.changeAttributeValue(current_feature.id(), p2e, round(p2_ground, 3))
+
                 # Update p1_h if needed (adopt the larger new upstream depth)
                 try:
                     existing_p1_h_val = current_feature.attribute(p1h)
@@ -1250,39 +1269,8 @@ class ElevationFloaterController(QtCore.QObject):
 
                 # Compute downstream bottom and depth
                 if p1_ground is None or p2_ground is None:
-                    print(f"[SEWERAGE DEBUG] Missing ground elevation on feature {current_feature.id()}, trying to interpolate...")
-                    
-                    # Try to interpolate missing elevations using the interpolator from the dock widget
-                    try:
-                        if hasattr(self, '_gate_dock') and self._gate_dock:
-                            # Get current DEM layer
-                            dem_layer = self._gate_dock._current_dem_layer()
-                            if dem_layer:
-                                # Get geometry endpoints
-                                p1_point = QgsPointXY(current_pts[0])
-                                p2_point = QgsPointXY(current_pts[-1])
-                                
-                                # Interpolate missing elevations
-                                if p1_ground is None and p1e >= 0:
-                                    interpolated = self._gate_dock._interpolate_elevation_from_dem(p1_point, self._current_layer.crs(), dem_layer)
-                                    if interpolated is not None:
-                                        p1_ground = interpolated
-                                        self._current_layer.changeAttributeValue(current_feature.id(), p1e, p1_ground)
-                                        print(f"[SEWERAGE DEBUG] Interpolated P1 elevation: {p1_ground}m")
-                                
-                                if p2_ground is None and p2e >= 0:
-                                    interpolated = self._gate_dock._interpolate_elevation_from_dem(p2_point, self._current_layer.crs(), dem_layer)
-                                    if interpolated is not None:
-                                        p2_ground = interpolated
-                                        self._current_layer.changeAttributeValue(current_feature.id(), p2e, p2_ground)
-                                        print(f"[SEWERAGE DEBUG] Interpolated P2 elevation: {p2_ground}m")
-                    except Exception as ex:
-                        print(f"[SEWERAGE DEBUG] Error during elevation interpolation: {ex}")
-                    
-                    # If still missing elevations after interpolation attempt, stop
-                    if p1_ground is None or p2_ground is None:
-                        print(f"[SEWERAGE DEBUG] Still missing ground elevation after interpolation attempt, stopping")
-                        break
+                    print(f"[SEWERAGE DEBUG] Unable to get ground elevation on feature {current_feature.id()} - neither stored nor interpolatable from DEM, stopping")
+                    break
 
                 upstream_bottom = p1_ground - effective_p1_depth
                 # Distance between endpoints in meters
@@ -1314,6 +1302,44 @@ class ElevationFloaterController(QtCore.QObject):
             print("[SEWERAGE DEBUG] Downstream recalculation complete")
         except Exception as e:
             print(f"[SEWERAGE DEBUG] Error in downstream recalculation: {e}")
+
+    def _interpolate_elevation_from_dem(self, point: QgsPointXY) -> Optional[float]:
+        """Interpolate elevation from DEM at given point. Returns None if unavailable."""
+        try:
+            # Guard against removed raster providers
+            if not self._interp or not self._to_raster:
+                print("[SEWERAGE DEBUG] No DEM interpolator available for elevation interpolation")
+                return None
+            
+            # Check if provider is still valid
+            try:
+                _ = self._interp.dp
+            except Exception:
+                print("[SEWERAGE DEBUG] DEM provider has been removed, cannot interpolate")
+                return None
+            
+            # Transform point to raster CRS
+            try:
+                lyr_pt = self._to_raster.transform(point)
+            except Exception as e:
+                print(f"[SEWERAGE DEBUG] CRS transform error during elevation interpolation: {e}")
+                return None
+            
+            # Interpolate elevation
+            try:
+                elev = self._interp.bilinear(lyr_pt)
+                if elev is not None:
+                    return float(elev)
+                else:
+                    print(f"[SEWERAGE DEBUG] DEM interpolation returned no data at point ({point.x():.3f}, {point.y():.3f})")
+                    return None
+            except Exception as e:
+                print(f"[SEWERAGE DEBUG] DEM interpolation error: {e}")
+                return None
+                
+        except Exception as e:
+            print(f"[SEWERAGE DEBUG] Error in _interpolate_elevation_from_dem: {e}")
+            return None
 
     def _get_field_mapping(self):
         """Get field mapping from dock widget"""

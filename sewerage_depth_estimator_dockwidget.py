@@ -921,18 +921,23 @@ class SewerageDepthEstimatorDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
     def _prepare_selected_features(self, selected_features, layer, dem_layer):
         """Clear depths and interpolate missing elevations for selected features"""
         from .elevation_floater import RasterInterpolator
+        from qgis.core import QgsCoordinateTransform, QgsProject, QgsPointXY
         
         print("[SEWERAGE DEBUG] Preparing selected features - clearing depths and interpolating elevations...")
         
         # Get field indices
         field_mapping = self._get_field_mapping(layer)
+        p1_elev_idx = field_mapping.get('p1_elev', -1)
+        p2_elev_idx = field_mapping.get('p2_elev', -1)
         p1_h_idx = field_mapping.get('p1_h', -1)
         p2_h_idx = field_mapping.get('p2_h', -1)
 
-        print(f"[SEWERAGE DEBUG] Field mapping: {field_mapping}")
+        print(f"[SEWERAGE DEBUG] Field mapping: p1_elev={p1_elev_idx}, p2_elev={p2_elev_idx}, p1_h={p1_h_idx}, p2_h={p2_h_idx}")
 
-        # Setup shared interpolator for efficiency
+        # Setup raster interpolator
         interpolator = RasterInterpolator(dem_layer, band=1)
+        transform_context = QgsProject.instance().transformContext()
+        to_raster = QgsCoordinateTransform(layer.crs(), dem_layer.crs(), transform_context)
 
         for feature in selected_features:
             try:
@@ -946,13 +951,60 @@ class SewerageDepthEstimatorDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                     layer.changeAttributeValue(feature.id(), p2_h_idx, None)
                     print(f"[SEWERAGE DEBUG]   Cleared p2_h for feature {feature.id()}")
 
-                # Interpolate missing elevations using centralized method
-                p1_elev, p2_elev = self._interpolate_missing_elevations(feature, layer, dem_layer, field_mapping, interpolator)
+                # Get geometry endpoints
+                geom = feature.geometry()
+                if geom.isEmpty():
+                    print(f"[SEWERAGE DEBUG]   Feature {feature.id()} has empty geometry, skipping")
+                    continue
                 
-                if p1_elev is not None and p2_elev is not None:
-                    print(f"[SEWERAGE DEBUG]   Feature {feature.id()} elevations: P1={p1_elev}m, P2={p2_elev}m")
+                if geom.isMultipart():
+                    lines = geom.asMultiPolyline()
+                    if not lines:
+                        print(f"[SEWERAGE DEBUG]   Feature {feature.id()} has no lines, skipping")
+                        continue
+                    pts = lines[0]
                 else:
-                    print(f"[SEWERAGE DEBUG]   Feature {feature.id()} missing elevations after interpolation: P1={p1_elev}, P2={p2_elev}")
+                    pts = geom.asPolyline()
+                
+                if len(pts) < 2:
+                    print(f"[SEWERAGE DEBUG]   Feature {feature.id()} has less than 2 points, skipping")
+                    continue
+
+                p1, p2 = QgsPointXY(pts[0]), QgsPointXY(pts[-1])
+                print(f"[SEWERAGE DEBUG]   Feature {feature.id()} endpoints: P1({p1.x():.2f}, {p1.y():.2f}) -> P2({p2.x():.2f}, {p2.y():.2f})")
+
+                # Interpolate missing elevations
+                if p1_elev_idx >= 0:
+                    p1_elev = feature.attribute(p1_elev_idx)
+                    if p1_elev is None or p1_elev == '':
+                        try:
+                            p1_raster = to_raster.transform(p1)
+                            elev = interpolator.bilinear(p1_raster)
+                            if elev is not None:
+                                layer.changeAttributeValue(feature.id(), p1_elev_idx, round(float(elev), 2))
+                                print(f"[SEWERAGE DEBUG]   Interpolated P1 elevation: {round(float(elev), 2)}m")
+                            else:
+                                print(f"[SEWERAGE DEBUG]   Failed to interpolate P1 elevation")
+                        except Exception as ex:
+                            print(f"[SEWERAGE DEBUG]   Error interpolating P1 elevation: {ex}")
+                    else:
+                        print(f"[SEWERAGE DEBUG]   P1 elevation already exists: {p1_elev}m")
+
+                if p2_elev_idx >= 0:
+                    p2_elev = feature.attribute(p2_elev_idx)
+                    if p2_elev is None or p2_elev == '':
+                        try:
+                            p2_raster = to_raster.transform(p2)
+                            elev = interpolator.bilinear(p2_raster)
+                            if elev is not None:
+                                layer.changeAttributeValue(feature.id(), p2_elev_idx, round(float(elev), 2))
+                                print(f"[SEWERAGE DEBUG]   Interpolated P2 elevation: {round(float(elev), 2)}m")
+                            else:
+                                print(f"[SEWERAGE DEBUG]   Failed to interpolate P2 elevation")
+                        except Exception as ex:
+                            print(f"[SEWERAGE DEBUG]   Error interpolating P2 elevation: {ex}")
+                    else:
+                        print(f"[SEWERAGE DEBUG]   P2 elevation already exists: {p2_elev}m")
 
             except Exception as e:
                 print(f"[SEWERAGE DEBUG] Error preparing feature {feature.id()}: {e}")
@@ -1018,10 +1070,42 @@ class SewerageDepthEstimatorDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             if p1_elev is None or p2_elev is None:
                 print(f"[SEWERAGE DEBUG]   Feature {feature.id()} missing elevations (p1={p1_elev}, p2={p2_elev}) - trying to interpolate now...")
                 
-                # Use centralized interpolation method
-                p1_elev, p2_elev = self._interpolate_missing_elevations(feature, layer, dem_layer, field_mapping)
+                # Try to interpolate missing elevations on the fly
+                try:
+                    from .elevation_floater import RasterInterpolator
+                    from qgis.core import QgsCoordinateTransform, QgsProject
+                    
+                    interpolator_temp = RasterInterpolator(dem_layer, band=1)
+                    transform_context = QgsProject.instance().transformContext()
+                    to_raster_temp = QgsCoordinateTransform(layer.crs(), dem_layer.crs(), transform_context)
+                except Exception as ex:
+                    print(f"[SEWERAGE DEBUG]   Error setting up interpolator: {ex}, skipping feature {feature.id()}")
+                    continue
                 
-                # Check if interpolation was successful
+                # Try to interpolate missing values
+                if p1_elev is None and p1_elev_idx >= 0:
+                    try:
+                        p1_raster = to_raster_temp.transform(p1)
+                        elev = interpolator_temp.bilinear(p1_raster)
+                        if elev is not None:
+                            p1_elev = round(float(elev), 2)
+                            layer.changeAttributeValue(feature.id(), p1_elev_idx, p1_elev)
+                            print(f"[SEWERAGE DEBUG]   Interpolated P1 elevation on-the-fly: {p1_elev}m")
+                    except Exception as ex:
+                        print(f"[SEWERAGE DEBUG]   Error interpolating P1: {ex}")
+                
+                if p2_elev is None and p2_elev_idx >= 0:
+                    try:
+                        p2_raster = to_raster_temp.transform(p2)
+                        elev = interpolator_temp.bilinear(p2_raster)
+                        if elev is not None:
+                            p2_elev = round(float(elev), 2)
+                            layer.changeAttributeValue(feature.id(), p2_elev_idx, p2_elev)
+                            print(f"[SEWERAGE DEBUG]   Interpolated P2 elevation on-the-fly: {p2_elev}m")
+                    except Exception as ex:
+                        print(f"[SEWERAGE DEBUG]   Error interpolating P2: {ex}")
+                
+                # Check again if we have elevations now
                 if p1_elev is None or p2_elev is None:
                     print(f"[SEWERAGE DEBUG]   Still missing elevations after interpolation attempt, skipping feature {feature.id()}")
                     continue
@@ -1259,115 +1343,3 @@ class SewerageDepthEstimatorDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 'p1_h': layer.fields().indexOf('p1_h'),
                 'p2_h': layer.fields().indexOf('p2_h')
             }
-
-    def _interpolate_elevation_from_dem(self, point, layer_crs, dem_layer, interpolator=None):
-        """Centralized utility to interpolate elevation from DEM at a given point
-        
-        Args:
-            point: QgsPointXY in layer_crs coordinate system
-            layer_crs: QgsCoordinateReferenceSystem of the point
-            dem_layer: QgsRasterLayer for elevation
-            interpolator: Optional RasterInterpolator (will create if None)
-            
-        Returns:
-            float: Interpolated elevation or None if failed
-        """
-        try:
-            from .elevation_floater import RasterInterpolator
-            from qgis.core import QgsCoordinateTransform, QgsProject
-            
-            # Create interpolator if not provided
-            if interpolator is None:
-                interpolator = RasterInterpolator(dem_layer, band=1)
-            
-            # Transform point to raster CRS
-            transform_context = QgsProject.instance().transformContext()
-            to_raster = QgsCoordinateTransform(layer_crs, dem_layer.crs(), transform_context)
-            raster_point = to_raster.transform(point)
-            
-            # Interpolate elevation
-            elevation = interpolator.bilinear(raster_point)
-            if elevation is not None:
-                return round(float(elevation), 2)
-            else:
-                return None
-                
-        except Exception as ex:
-            print(f"[SEWERAGE DEBUG] Error interpolating elevation: {ex}")
-            return None
-    
-    def _interpolate_missing_elevations(self, feature, layer, dem_layer, field_mapping, interpolator=None):
-        """Interpolate and update missing elevation attributes for a feature
-        
-        Args:
-            feature: QgsFeature to process
-            layer: QgsVectorLayer containing the feature
-            dem_layer: QgsRasterLayer for elevation
-            field_mapping: Dict with field indices (from _get_field_mapping)
-            interpolator: Optional RasterInterpolator (will create if None)
-            
-        Returns:
-            tuple: (p1_elev, p2_elev) - the elevations (interpolated or existing)
-        """
-        try:
-            from qgis.core import QgsPointXY
-            
-            p1_elev_idx = field_mapping.get('p1_elev', -1)
-            p2_elev_idx = field_mapping.get('p2_elev', -1)
-            
-            # Get existing elevations
-            p1_elev = feature.attribute(p1_elev_idx) if p1_elev_idx >= 0 else None
-            p2_elev = feature.attribute(p2_elev_idx) if p2_elev_idx >= 0 else None
-            
-            # Convert to float if possible
-            try:
-                p1_elev = float(p1_elev) if p1_elev is not None else None
-            except:
-                p1_elev = None
-            try:
-                p2_elev = float(p2_elev) if p2_elev is not None else None
-            except:
-                p2_elev = None
-            
-            # Get geometry endpoints
-            geom = feature.geometry()
-            if geom.isEmpty():
-                print(f"[SEWERAGE DEBUG] Feature {feature.id()} has empty geometry")
-                return p1_elev, p2_elev
-            
-            if geom.isMultipart():
-                lines = geom.asMultiPolyline()
-                if not lines or len(lines[0]) < 2:
-                    print(f"[SEWERAGE DEBUG] Feature {feature.id()} invalid multipart geometry")
-                    return p1_elev, p2_elev
-                pts = lines[0]
-            else:
-                pts = geom.asPolyline()
-                if len(pts) < 2:
-                    print(f"[SEWERAGE DEBUG] Feature {feature.id()} invalid geometry")
-                    return p1_elev, p2_elev
-            
-            p1 = QgsPointXY(pts[0])
-            p2 = QgsPointXY(pts[-1])
-            
-            # Interpolate missing P1 elevation
-            if p1_elev is None and p1_elev_idx >= 0:
-                interpolated = self._interpolate_elevation_from_dem(p1, layer.crs(), dem_layer, interpolator)
-                if interpolated is not None:
-                    p1_elev = interpolated
-                    layer.changeAttributeValue(feature.id(), p1_elev_idx, p1_elev)
-                    print(f"[SEWERAGE DEBUG] Interpolated P1 elevation for feature {feature.id()}: {p1_elev}m")
-            
-            # Interpolate missing P2 elevation
-            if p2_elev is None and p2_elev_idx >= 0:
-                interpolated = self._interpolate_elevation_from_dem(p2, layer.crs(), dem_layer, interpolator)
-                if interpolated is not None:
-                    p2_elev = interpolated
-                    layer.changeAttributeValue(feature.id(), p2_elev_idx, p2_elev)
-                    print(f"[SEWERAGE DEBUG] Interpolated P2 elevation for feature {feature.id()}: {p2_elev}m")
-            
-            return p1_elev, p2_elev
-            
-        except Exception as ex:
-            print(f"[SEWERAGE DEBUG] Error in _interpolate_missing_elevations for feature {feature.id()}: {ex}")
-            return None, None
