@@ -282,6 +282,8 @@ class SewerageDepthEstimatorDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 return
             try:
                 self._floater.start(layer, band=1, number_format="{value:.2f}")
+                # Start change monitoring when depth estimation is enabled
+                self._start_change_monitoring_if_available()
             except Exception:
                 if self.iface:
                     self.iface.messageBar().pushCritical(self.tr("Sewerage Depth Estimator"), self.tr("Failed to start elevation floater."))
@@ -290,6 +292,8 @@ class SewerageDepthEstimatorDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 self.chkEstimateDepth.blockSignals(False)
         else:
             self._floater.stop()
+            # Stop change monitoring when depth estimation is disabled
+            self._stop_change_monitoring_if_available()
 
     def _on_params_changed(self, *args):
         self._push_params_to_floater()
@@ -1415,16 +1419,16 @@ class SewerageDepthEstimatorDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 # Update current parameters
                 self._update_change_management_parameters()
                 
-                # Start monitoring if we have both layers
-                if dem_layer is not None:
-                    self._change_integration.start_change_monitoring()
-                    #                     print("[SEWERAGE DEBUG] Change management system started with automatic monitoring")
+                # Start monitoring only if "Estimate depth" is enabled and we have both layers
+                if dem_layer is not None and self._is_depth_estimation_enabled():
+                    self._start_change_monitoring_if_available()
+                    # print("[SEWERAGE DEBUG] Change management system started with automatic monitoring")
                 else:
                     pass
-                    #                     print("[SEWERAGE DEBUG] Change management initialized but no DEM layer - monitoring not started")
+                    # print("[SEWERAGE DEBUG] Change management initialized but not started (depth estimation disabled or no DEM)")
             else:
                 pass
-                #                 print("[SEWERAGE DEBUG] Failed to initialize change management system")
+                # print("[SEWERAGE DEBUG] Failed to initialize change management system")
                 
         except Exception as e:
             pass
@@ -1551,6 +1555,36 @@ class SewerageDepthEstimatorDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 'enhanced_system': True,  # Always true now
                 'status': status
             }
+            
+        except Exception as e:
+            # print(f"[SEWERAGE DEBUG] Error in enhanced test: {e}")
+            pass
+    
+    def _is_depth_estimation_enabled(self) -> bool:
+        """Check if the "Estimate depth" checkbox is enabled."""
+        return hasattr(self, 'chkEstimateDepth') and self.chkEstimateDepth.isChecked()
+    
+    def _start_change_monitoring_if_available(self) -> bool:
+        """Start change monitoring if change management is available and depth estimation is enabled."""
+        if not self._change_integration or not self._is_depth_estimation_enabled():
+            return False
+        
+        try:
+            return self._change_integration.start_change_monitoring()
+        except Exception as e:
+            # print(f"[SEWERAGE DEBUG] Error starting change monitoring: {e}")
+            return False
+    
+    def _stop_change_monitoring_if_available(self) -> bool:
+        """Stop change monitoring if change management is available."""
+        if not self._change_integration:
+            return True
+        
+        try:
+            return self._change_integration.stop_change_monitoring()
+        except Exception as e:
+            # print(f"[SEWERAGE DEBUG] Error stopping change monitoring: {e}")
+            return False
             
         except Exception as e:
             #             print(f"[SEWERAGE DEBUG] Error in enhanced test: {e}")
