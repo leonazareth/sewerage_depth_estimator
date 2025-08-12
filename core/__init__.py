@@ -7,8 +7,7 @@ from .depth_calculator import DepthCalculator
 from .network_analyzer import NetworkAnalyzer
 from .geometry_change_detector import GeometryChangeDetector, VertexChange, GeometrySnapshot
 from .elevation_updater import ElevationUpdater
-from .network_connectivity import NetworkConnectivityAnalyzer, NetworkConnection, ConnectionInfo
-from .advanced_connectivity_analyzer import AdvancedConnectivityAnalyzer
+from .connectivity_analyzer import ConnectivityAnalyzer
 from .network_tree_mapper import NetworkTreeMapper
 from .depth_recalculator import DepthRecalculator
 from .change_management_system import ChangeManagementSystem
@@ -20,10 +19,7 @@ __all__ = [
     'VertexChange',
     'GeometrySnapshot',
     'ElevationUpdater',
-    'NetworkConnectivityAnalyzer',
-    'AdvancedConnectivityAnalyzer',
-    'NetworkConnection',
-    'ConnectionInfo',
+    'ConnectivityAnalyzer',
     'NetworkTreeMapper',
     'DepthRecalculator',
     'ChangeManagementSystem'

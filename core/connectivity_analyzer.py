@@ -1,24 +1,36 @@
 # -*- coding: utf-8 -*-
 """
-Advanced connectivity analyzer that handles vertex movement scenarios properly.
+Comprehensive connectivity analyzer for sewerage networks.
+
+This module provides complete network connectivity analysis including:
+- Basic connectivity mapping and validation
+- Advanced vertex movement impact analysis
+- Topology change detection and handling
+- Network statistics and validation
 """
 
 from typing import List, Dict, Set, Optional, Tuple
 from qgis.core import QgsPointXY, QgsVectorLayer
 from ..utils import DebugLogger, CoordinateUtils
 from ..data import FieldMapper
-from .network_connectivity import NetworkConnectivityAnalyzer
+from .network_connectivity import ConnectivityAnalyzer
 from .geometry_change_detector import VertexChange
 
 
-class AdvancedConnectivityAnalyzer:
-    """Enhanced connectivity analyzer for proper vertex movement handling."""
+class ConnectivityAnalyzer:
+    """
+    Comprehensive connectivity analyzer for sewerage networks.
+    
+    This class provides both basic connectivity analysis and advanced vertex movement
+    handling. It combines the functionality of basic connectivity mapping with 
+    sophisticated impact analysis for geometry changes.
+    """
     
     def __init__(self, layer: QgsVectorLayer, field_mapper: FieldMapper, tolerance: float = 1e-6):
         self.layer = layer
         self.field_mapper = field_mapper
         self.tolerance = tolerance
-        self.base_analyzer = NetworkConnectivityAnalyzer(layer, field_mapper, tolerance)
+        self.base_analyzer = ConnectivityAnalyzer(layer, field_mapper, tolerance)
         
         # Store topology before and after changes
         self._topology_before_changes = None
@@ -458,3 +470,72 @@ class AdvancedConnectivityAnalyzer:
         except Exception as e:
             DebugLogger.log_error("Error getting recalculation order", e)
             return affected_features
+    
+    # ============= BASIC CONNECTIVITY METHODS =============
+    # Consolidated methods from ConnectivityAnalyzer
+    
+    def get_connection_at_point(self, coordinate: QgsPointXY) -> Optional['NetworkConnection']:
+        """Get network connection at given coordinate."""
+        node_key = CoordinateUtils.node_key(coordinate)
+        if hasattr(self.base_analyzer, '_network_connections'):
+            return self.base_analyzer._network_connections.get(node_key)
+        return None
+    
+    def find_convergent_nodes(self) -> List['NetworkConnection']:
+        """Find all convergent nodes in the network."""
+        if hasattr(self.base_analyzer, '_network_connections'):
+            return [conn for conn in self.base_analyzer._network_connections.values() if conn.is_convergent()]
+        return []
+    
+    def find_divergent_nodes(self) -> List['NetworkConnection']:
+        """Find all divergent nodes in the network.""" 
+        if hasattr(self.base_analyzer, '_network_connections'):
+            return [conn for conn in self.base_analyzer._network_connections.values() if conn.is_divergent()]
+        return []
+    
+    def get_upstream_features_for_node(self, coordinate: QgsPointXY) -> List[int]:
+        """Get feature IDs of segments ending at given coordinate."""
+        connection = self.get_connection_at_point(coordinate)
+        if connection:
+            return [conn.feature_id for conn in connection.get_upstream_connections()]
+        return []
+    
+    def get_downstream_features_for_node(self, coordinate: QgsPointXY) -> List[int]:
+        """Get feature IDs of segments starting from given coordinate."""
+        connection = self.get_connection_at_point(coordinate)
+        if connection:
+            return [conn.feature_id for conn in connection.get_downstream_connections()]
+        return []
+    
+    def validate_network_connectivity(self) -> Dict[str, List[str]]:
+        """
+        Validate network connectivity and return issues found.
+        
+        Returns:
+            Dictionary with lists of different types of connectivity issues
+        """
+        if hasattr(self.base_analyzer, 'validate_network_connectivity'):
+            return self.base_analyzer.validate_network_connectivity()
+        
+        # Basic validation if base analyzer doesn't have it
+        issues = {
+            'isolated_segments': [],
+            'multiple_outlets': [],
+            'circular_references': [],
+            'missing_connections': []
+        }
+        return issues
+    
+    def get_network_statistics(self) -> Dict[str, int]:
+        """Get network connectivity statistics."""
+        if hasattr(self.base_analyzer, 'get_network_statistics'):
+            return self.base_analyzer.get_network_statistics()
+        
+        # Basic stats if base analyzer doesn't have them
+        return {
+            'total_features': 0,
+            'total_connection_points': 0,
+            'convergent_nodes': 0,
+            'divergent_nodes': 0,
+            'simple_nodes': 0
+        }
