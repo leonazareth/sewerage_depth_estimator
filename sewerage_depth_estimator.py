@@ -167,7 +167,7 @@ class SewerageDepthEstimator:
     def initGui(self):
         """Create the menu entries and toolbar icons inside the QGIS GUI."""
 
-        icon_path = ':/plugins/sewerage_depth_estimator/icon.png'
+        icon_path = ':/plugins/sewerage_depth_estimator/icon/main-icon.png'
         self.add_action(
             icon_path,
             text=self.tr(u'Sewerage Depth Estimator'),
