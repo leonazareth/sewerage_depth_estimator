@@ -1250,8 +1250,39 @@ class ElevationFloaterController(QtCore.QObject):
 
                 # Compute downstream bottom and depth
                 if p1_ground is None or p2_ground is None:
-                    print(f"[SEWERAGE DEBUG] Missing ground elevation on feature {current_feature.id()}, stopping")
-                    break
+                    print(f"[SEWERAGE DEBUG] Missing ground elevation on feature {current_feature.id()}, trying to interpolate...")
+                    
+                    # Try to interpolate missing elevations using the interpolator from the dock widget
+                    try:
+                        if hasattr(self, '_gate_dock') and self._gate_dock:
+                            # Get current DEM layer
+                            dem_layer = self._gate_dock._current_dem_layer()
+                            if dem_layer:
+                                # Get geometry endpoints
+                                p1_point = QgsPointXY(current_pts[0])
+                                p2_point = QgsPointXY(current_pts[-1])
+                                
+                                # Interpolate missing elevations
+                                if p1_ground is None and p1e >= 0:
+                                    interpolated = self._gate_dock._interpolate_elevation_from_dem(p1_point, self._current_layer.crs(), dem_layer)
+                                    if interpolated is not None:
+                                        p1_ground = interpolated
+                                        self._current_layer.changeAttributeValue(current_feature.id(), p1e, p1_ground)
+                                        print(f"[SEWERAGE DEBUG] Interpolated P1 elevation: {p1_ground}m")
+                                
+                                if p2_ground is None and p2e >= 0:
+                                    interpolated = self._gate_dock._interpolate_elevation_from_dem(p2_point, self._current_layer.crs(), dem_layer)
+                                    if interpolated is not None:
+                                        p2_ground = interpolated
+                                        self._current_layer.changeAttributeValue(current_feature.id(), p2e, p2_ground)
+                                        print(f"[SEWERAGE DEBUG] Interpolated P2 elevation: {p2_ground}m")
+                    except Exception as ex:
+                        print(f"[SEWERAGE DEBUG] Error during elevation interpolation: {ex}")
+                    
+                    # If still missing elevations after interpolation attempt, stop
+                    if p1_ground is None or p2_ground is None:
+                        print(f"[SEWERAGE DEBUG] Still missing ground elevation after interpolation attempt, stopping")
+                        break
 
                 upstream_bottom = p1_ground - effective_p1_depth
                 # Distance between endpoints in meters
