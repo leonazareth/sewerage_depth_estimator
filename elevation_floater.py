@@ -570,8 +570,9 @@ class ElevationFloaterController(QtCore.QObject):
             except Exception:
                 pass
             
-            print(f"[SEWERAGE DEBUG] Searching for existing depth at {map_pt.x():.6f}, {map_pt.y():.6f}")
-            print(f"[SEWERAGE DEBUG] Found {len(features)} features in search area")
+            # Debug: Commented out verbose depth search logging
+            # print(f"[SEWERAGE DEBUG] Searching for existing depth at {map_pt.x():.6f}, {map_pt.y():.6f}")
+            # print(f"[SEWERAGE DEBUG] Found {len(features)} features in search area")
             
             max_depth: Optional[float] = None
             for feature in features:
@@ -612,7 +613,8 @@ class ElevationFloaterController(QtCore.QObject):
                         continue
                     try:
                         depth_float = float(val)
-                        print(f"[SEWERAGE DEBUG] Candidate depth {depth_float:.3f}m on feature {feature.id()}")
+                        # Debug: Commented out verbose candidate depth logging
+                        # print(f"[SEWERAGE DEBUG] Candidate depth {depth_float:.3f}m on feature {feature.id()}")
                         if max_depth is None or depth_float > max_depth:
                             max_depth = depth_float
                     except (ValueError, TypeError):
@@ -622,7 +624,9 @@ class ElevationFloaterController(QtCore.QObject):
             print(f"[SEWERAGE DEBUG] Error searching for existing depth: {e}")
             
         if max_depth is not None:
-            print(f"[SEWERAGE DEBUG] Selected maximum coincident depth: {max_depth:.3f}m")
+            # Debug: Commented out verbose depth selection logging
+            # print(f"[SEWERAGE DEBUG] Selected maximum coincident depth: {max_depth:.3f}m")
+            pass
         return max_depth
 
     def _get_depth_from_snap_match(self, snap_match):

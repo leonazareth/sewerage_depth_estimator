@@ -34,6 +34,7 @@ except Exception:  # pragma: no cover - optional in some envs
 from qgis.gui import QgsColorButton
 
 from .elevation_floater import ElevationFloaterController
+from .change_manager_integration import ChangeManagerIntegration
 
 FORM_CLASS, _ = uic.loadUiType(os.path.join(
     os.path.dirname(__file__), 'sewerage_depth_estimator_dockwidget_base.ui'))
@@ -59,6 +60,9 @@ class SewerageDepthEstimatorDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
 
         # Elevation floater controller (non-intrusive, does not change active tool)
         self._floater = ElevationFloaterController(self.iface) if self.iface else None
+        
+        # Change management system for automatic updates - using enhanced system
+        self._change_integration = ChangeManagerIntegration(use_enhanced_system=True)
 
         # Wire checkbox
         if hasattr(self, 'chkEstimateDepth'):
@@ -90,11 +94,11 @@ class SewerageDepthEstimatorDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         # No CRS selection widget; measure CRS will follow the vector layer
         # Parameters wiring
         if hasattr(self, 'spnMinCover'):
-            self.spnMinCover.valueChanged.connect(self._on_params_changed)
+            self.spnMinCover.valueChanged.connect(self._on_params_changed_with_change_management)
         if hasattr(self, 'spnDiameter'):
-            self.spnDiameter.valueChanged.connect(self._on_params_changed)
+            self.spnDiameter.valueChanged.connect(self._on_params_changed_with_change_management)
         if hasattr(self, 'spnSlope'):
-            self.spnSlope.valueChanged.connect(self._on_params_changed)
+            self.spnSlope.valueChanged.connect(self._on_params_changed_with_change_management)
         if hasattr(self, 'spnInitialDepth'):
             self.spnInitialDepth.valueChanged.connect(self._on_params_changed)
         # Display toggles
@@ -132,12 +136,21 @@ class SewerageDepthEstimatorDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         # Measure CRS will be pushed when vector layer is set
         # Push initial style to floater
         self._push_style_to_floater()
+        
+        # Initialize change management system if layers are already available
+        self._initialize_change_management()
 
     def closeEvent(self, event):
         # Ensure floater is removed when closing
         try:
             if self._floater:
                 self._floater.stop()
+        except Exception:
+            pass
+        # Cleanup change management system
+        try:
+            if self._change_integration:
+                self._change_integration.cleanup()
         except Exception:
             pass
         try:
@@ -227,6 +240,9 @@ class SewerageDepthEstimatorDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             pass
         # Save configuration
         self._save_project_config()
+        
+        # Initialize change management system when DEM layer changes
+        self._initialize_change_management()
 
     # Removed band change handler
 
@@ -383,6 +399,9 @@ class SewerageDepthEstimatorDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         
         # Monitor selection changes for recalculate button
         self._connect_selection_monitoring()
+        
+        # Initialize change management system
+        self._initialize_change_management()
 
     def _push_gate_layer_to_floater(self):
         if not self._floater:
@@ -1343,3 +1362,157 @@ class SewerageDepthEstimatorDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 'p1_h': layer.fields().indexOf('p1_h'),
                 'p2_h': layer.fields().indexOf('p2_h')
             }
+
+    # --- Change Management System Integration -----------------------------------
+    
+    def _initialize_change_management(self):
+        """Initialize or reinitialize the change management system when layers change."""
+        try:
+            vector_layer = self._current_line_layer()
+            dem_layer = self._current_dem_layer()
+            
+            if vector_layer is None:
+                print("[SEWERAGE DEBUG] No vector layer available for change management")
+                return
+            
+            # Initialize the change management system
+            success = self._change_integration.initialize_change_management(vector_layer, dem_layer)
+            
+            if success:
+                # Update current parameters
+                self._update_change_management_parameters()
+                
+                # Start monitoring if we have both layers
+                if dem_layer is not None:
+                    self._change_integration.start_change_monitoring()
+                    print("[SEWERAGE DEBUG] Change management system started with automatic monitoring")
+                else:
+                    print("[SEWERAGE DEBUG] Change management initialized but no DEM layer - monitoring not started")
+            else:
+                print("[SEWERAGE DEBUG] Failed to initialize change management system")
+                
+        except Exception as e:
+            print(f"[SEWERAGE DEBUG] Error initializing change management: {e}")
+    
+    def _update_change_management_parameters(self):
+        """Update change management system with current parameter values."""
+        try:
+            if not self._change_integration:
+                return
+                
+            # Get current parameter values
+            min_cover = self.spnMinCover.value() if hasattr(self, 'spnMinCover') else 0.9
+            diameter = self.spnDiameter.value() if hasattr(self, 'spnDiameter') else 150.0  # mm
+            slope = self.spnSlope.value() if hasattr(self, 'spnSlope') else 0.005
+            
+            # Update the change management system
+            self._change_integration.update_calculation_parameters(
+                min_cover_m=min_cover,
+                diameter_m=diameter,  # This will be converted from mm to m in the integration layer
+                slope_m_per_m=slope
+            )
+            
+            print(f"[SEWERAGE DEBUG] Updated change management parameters: cover={min_cover}m, diameter={diameter}mm, slope={slope}")
+            
+        except Exception as e:
+            print(f"[SEWERAGE DEBUG] Error updating change management parameters: {e}")
+    
+    def _on_params_changed_with_change_management(self, *args):
+        """Handle parameter changes and update both floater and change management."""
+        # Call original parameter change handler
+        self._on_params_changed(*args)
+        
+        # Update change management parameters
+        self._update_change_management_parameters()
+    
+    def get_change_management_status(self):
+        """Get status of the change management system for debugging."""
+        try:
+            if not self._change_integration:
+                return {"initialized": False}
+                
+            status = self._change_integration.get_system_status()
+            status["vector_layer"] = self._current_line_layer().name() if self._current_line_layer() else None
+            status["dem_layer"] = self._current_dem_layer().name() if self._current_dem_layer() else None
+            
+            return status
+        except Exception as e:
+            return {"error": str(e)}
+    
+    def manual_recalculate_all_depths(self):
+        """Manually trigger full network recalculation using change management system."""
+        try:
+            if not self._change_integration:
+                print("[SEWERAGE DEBUG] Change management not initialized")
+                return False
+                
+            stats = self._change_integration.manual_recalculate_network(selected_only=False)
+            print(f"[SEWERAGE DEBUG] Manual recalculation complete: {stats}")
+            
+            if self.iface and 'error' not in stats:
+                self.iface.messageBar().pushSuccess(
+                    "Sewerage Depth Estimator",
+                    f"Recalculated depths for network: {stats.get('recalculated', 0)} segments updated"
+                )
+            
+            return 'error' not in stats
+            
+        except Exception as e:
+            print(f"[SEWERAGE DEBUG] Error in manual recalculation: {e}")
+            if self.iface:
+                self.iface.messageBar().pushCritical(
+                    "Sewerage Depth Estimator", 
+                    f"Error in recalculation: {str(e)}"
+                )
+            return False
+    
+    def test_change_management_system(self):
+        """Test method to verify change management system is working."""
+        try:
+            print("[SEWERAGE DEBUG] ===== TESTING ENHANCED CHANGE MANAGEMENT SYSTEM =====")
+            
+            # Get current status
+            status = self.get_change_management_status()
+            print(f"[SEWERAGE DEBUG] Current status: {status}")
+            
+            # Check if monitoring is active
+            is_monitoring = self._change_integration.is_monitoring_active() if self._change_integration else False
+            print(f"[SEWERAGE DEBUG] Enhanced monitoring active: {is_monitoring}")
+            
+            # Check layers
+            vector_layer = self._current_line_layer()
+            dem_layer = self._current_dem_layer()
+            print(f"[SEWERAGE DEBUG] Vector layer: {vector_layer.name() if vector_layer else 'None'}")
+            print(f"[SEWERAGE DEBUG] DEM layer: {dem_layer.name() if dem_layer else 'None'}")
+            
+            # Test enhanced system features
+            if self._change_integration and hasattr(self._change_integration, 'enhanced_change_manager'):
+                enhanced_manager = self._change_integration.enhanced_change_manager
+                if enhanced_manager:
+                    print("[SEWERAGE DEBUG] Enhanced system features:")
+                    network_stats = enhanced_manager.get_network_statistics()
+                    print(f"[SEWERAGE DEBUG]   - Network topology: {network_stats.get('network_topology', {})}")
+                    print(f"[SEWERAGE DEBUG]   - Processing stats: {network_stats.get('processing_stats', {})}")
+                    print(f"[SEWERAGE DEBUG]   - Elevation interpolation: {network_stats.get('elevation_interpolation_available', False)}")
+            
+            # If not monitoring but we have layers, try to start
+            if not is_monitoring and vector_layer and dem_layer:
+                print("[SEWERAGE DEBUG] Attempting to restart enhanced change management...")
+                self._initialize_change_management()
+                
+                new_status = self._change_integration.is_monitoring_active() if self._change_integration else False
+                print(f"[SEWERAGE DEBUG] Enhanced monitoring after restart: {new_status}")
+            
+            print("[SEWERAGE DEBUG] ===== ENHANCED TEST COMPLETE =====")
+            
+            return {
+                'monitoring_active': is_monitoring,
+                'has_vector_layer': vector_layer is not None,
+                'has_dem_layer': dem_layer is not None,
+                'enhanced_system': self._change_integration.use_enhanced_system if self._change_integration else False,
+                'status': status
+            }
+            
+        except Exception as e:
+            print(f"[SEWERAGE DEBUG] Error in enhanced test: {e}")
+            return {'error': str(e)}
