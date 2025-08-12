@@ -13,7 +13,6 @@ from typing import List, Dict, Set, Optional, Tuple
 from qgis.core import QgsPointXY, QgsVectorLayer
 from ..utils import DebugLogger, CoordinateUtils
 from ..data import FieldMapper
-from .network_connectivity import ConnectivityAnalyzer
 from .geometry_change_detector import VertexChange
 
 
