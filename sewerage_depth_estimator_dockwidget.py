@@ -129,6 +129,9 @@ class SewerageDepthEstimatorDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         # Recalculate selected segments button
         if hasattr(self, 'btnRecalculateSelected'):
             self.btnRecalculateSelected.clicked.connect(self._on_recalculate_selected)
+        # Apply style button
+        if hasattr(self, 'btnApplyStyle'):
+            self.btnApplyStyle.clicked.connect(self._on_apply_style)
 
         # Initialize floater params
         self._push_params_to_floater()
@@ -950,6 +953,56 @@ class SewerageDepthEstimatorDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             #             print(f"[SEWERAGE DEBUG] Error in recalculate selected: {e}")
             if self.iface:
                 self.iface.messageBar().pushCritical("Sewerage Depth Estimator", f"Error: {str(e)}")
+
+    def _on_apply_style(self):
+        """Apply default QML style to the selected segment layer"""
+        import os
+        try:
+            layer = self._current_line_layer()
+            if not layer:
+                if self.iface:
+                    self.iface.messageBar().pushWarning("Sewerage Depth Estimator", "No line layer selected")
+                return
+            
+            # Get path to the QML style file
+            plugin_dir = os.path.dirname(__file__)
+            style_path = os.path.join(plugin_dir, "style", "default_segment_style.qml")
+            
+            if not os.path.exists(style_path):
+                if self.iface:
+                    self.iface.messageBar().pushCritical("Sewerage Depth Estimator", 
+                                                        f"Style file not found: {style_path}")
+                return
+            
+            # Apply the style to the layer
+            # loadNamedStyle returns (error_message, success_flag)
+            result = layer.loadNamedStyle(style_path)
+            
+            # Check if result is a tuple or just a boolean
+            if isinstance(result, tuple):
+                error_msg, success = result
+                if not success:
+                    if self.iface:
+                        self.iface.messageBar().pushCritical("Sewerage Depth Estimator", 
+                                                            f"Failed to apply style: {error_msg if error_msg else 'Unknown error'}")
+                    return
+            else:
+                # Some QGIS versions might return just a boolean
+                if not result:
+                    if self.iface:
+                        self.iface.messageBar().pushCritical("Sewerage Depth Estimator", 
+                                                            "Failed to apply style: Unknown error")
+                    return
+            
+            # Refresh layer to show style changes
+            layer.triggerRepaint()
+            if self.iface:
+                self.iface.messageBar().pushSuccess("Sewerage Depth Estimator", 
+                                                   f"Style applied successfully to layer '{layer.name()}'")
+                    
+        except Exception as e:
+            if self.iface:
+                self.iface.messageBar().pushCritical("Sewerage Depth Estimator", f"Error applying style: {str(e)}")
 
     def _prepare_selected_features(self, selected_features, layer, dem_layer):
         """Clear depths and interpolate missing elevations for selected features"""
