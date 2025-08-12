@@ -62,7 +62,7 @@ class SewerageDepthEstimatorDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self._floater = ElevationFloaterController(self.iface) if self.iface else None
         
         # Change management system for automatic updates - using enhanced system
-        self._change_integration = ChangeManagerIntegration(use_enhanced_system=True)
+        self._change_integration = ChangeManagerIntegration()
 
         # Wire checkbox
         if hasattr(self, 'chkEstimateDepth'):
@@ -1509,7 +1509,7 @@ class SewerageDepthEstimatorDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 'monitoring_active': is_monitoring,
                 'has_vector_layer': vector_layer is not None,
                 'has_dem_layer': dem_layer is not None,
-                'enhanced_system': self._change_integration.use_enhanced_system if self._change_integration else False,
+                'enhanced_system': True,  # Always true now
                 'status': status
             }
             

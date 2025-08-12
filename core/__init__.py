@@ -9,8 +9,8 @@ from .geometry_change_detector import GeometryChangeDetector, VertexChange, Geom
 from .elevation_updater import ElevationUpdater
 from .network_connectivity import NetworkConnectivityAnalyzer, NetworkConnection, ConnectionInfo
 from .advanced_connectivity_analyzer import AdvancedConnectivityAnalyzer
-from .depth_recalculator import DepthRecalculator
-from .change_management_system import ChangeManagementSystem
+from .enhanced_depth_recalculator import EnhancedDepthRecalculator
+from .enhanced_change_management_system import EnhancedChangeManagementSystem
 
 __all__ = [
     'DepthCalculator',
@@ -23,6 +23,6 @@ __all__ = [
     'AdvancedConnectivityAnalyzer',
     'NetworkConnection',
     'ConnectionInfo',
-    'DepthRecalculator',
-    'ChangeManagementSystem'
+    'EnhancedDepthRecalculator',
+    'EnhancedChangeManagementSystem'
 ]

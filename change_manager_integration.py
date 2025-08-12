@@ -6,28 +6,20 @@ with the existing plugin architecture.
 
 from typing import Optional
 from qgis.core import QgsVectorLayer, QgsMapLayer
-from .core import ChangeManagementSystem
 from .core.enhanced_change_management_system import EnhancedChangeManagementSystem
 from .utils import DebugLogger
 
 
 class ChangeManagerIntegration:
     """
-    Integration layer for the change management system with the existing plugin.
+    Integration layer for the enhanced change management system with the existing plugin.
     
-    This class demonstrates how to integrate the new change detection and 
-    automatic recalculation features into the existing plugin.
+    This class integrates the enhanced tree-based depth recalculation system
+    with automatic change detection into the existing plugin.
     """
     
-    def __init__(self, use_enhanced_system: bool = True):
-        """
-        Initialize change manager integration.
-        
-        Args:
-            use_enhanced_system: If True, use enhanced tree-based system
-        """
-        self.use_enhanced_system = use_enhanced_system
-        self.change_manager: Optional[ChangeManagementSystem] = None
+    def __init__(self):
+        """Initialize change manager integration."""
         self.enhanced_change_manager: Optional[EnhancedChangeManagementSystem] = None
         self._current_vector_layer: Optional[QgsVectorLayer] = None
         self._current_dem_layer: Optional[QgsMapLayer] = None
@@ -46,33 +38,21 @@ class ChangeManagerIntegration:
         """
         try:
             # Stop existing change manager if active
-            if self.change_manager or self.enhanced_change_manager:
+            if self.enhanced_change_manager:
                 self.stop_change_monitoring()
             
-            # Create appropriate change manager
-            if self.use_enhanced_system:
-                DebugLogger.log("Initializing Enhanced Change Management System...")
-                self.enhanced_change_manager = EnhancedChangeManagementSystem(vector_layer, dem_layer)
-                
-                # Validate network
-                validation_results = self.enhanced_change_manager.validate_network()
-                if validation_results.get('issues'):
-                    DebugLogger.log(f"Network validation issues: {len(validation_results['issues'])}")
-                    for issue in validation_results['issues']:
-                        DebugLogger.log(f"  - {issue['type']}: {issue['description']}")
-                
-                DebugLogger.log("Enhanced change management system initialized successfully")
-            else:
-                DebugLogger.log("Initializing Standard Change Management System...")
-                self.change_manager = ChangeManagementSystem(vector_layer, dem_layer)
-                
-                # Validate network and create missing fields if needed
-                validation_results = self.change_manager.validate_network()
-                if 'field_issues' in validation_results:
-                    DebugLogger.log("Creating missing fields...")
-                    self.change_manager.create_missing_fields()
-                
-                DebugLogger.log("Standard change management system initialized successfully")
+            # Create enhanced change manager
+            DebugLogger.log("Initializing Enhanced Change Management System...")
+            self.enhanced_change_manager = EnhancedChangeManagementSystem(vector_layer, dem_layer)
+            
+            # Validate network
+            validation_results = self.enhanced_change_manager.validate_network()
+            if validation_results.get('issues'):
+                DebugLogger.log(f"Network validation issues: {len(validation_results['issues'])}")
+                for issue in validation_results['issues']:
+                    DebugLogger.log(f"  - {issue['type']}: {issue['description']}")
+            
+            DebugLogger.log("Enhanced change management system initialized successfully")
             
             self._current_vector_layer = vector_layer
             self._current_dem_layer = dem_layer
@@ -89,19 +69,14 @@ class ChangeManagerIntegration:
         Returns:
             True if monitoring started successfully
         """
-        if not (self.change_manager or self.enhanced_change_manager):
-            DebugLogger.log_error("Change manager not initialized")
+        if not self.enhanced_change_manager:
+            DebugLogger.log_error("Enhanced change manager not initialized")
             return False
         
         try:
-            if self.enhanced_change_manager:
-                success = self.enhanced_change_manager.start_monitoring()
-                if success:
-                    DebugLogger.log("Enhanced automatic change monitoring started")
-            else:
-                success = self.change_manager.start_monitoring()
-                if success:
-                    DebugLogger.log("Standard automatic change monitoring started")
+            success = self.enhanced_change_manager.start_monitoring()
+            if success:
+                DebugLogger.log("Enhanced automatic change monitoring started")
             return success
         except Exception as e:
             DebugLogger.log_error("Failed to start change monitoring", e)
@@ -114,19 +89,13 @@ class ChangeManagerIntegration:
         Returns:
             True if monitoring stopped successfully
         """
-        if not (self.change_manager or self.enhanced_change_manager):
+        if not self.enhanced_change_manager:
             return True
         
         try:
-            success = True
-            if self.enhanced_change_manager:
-                success = self.enhanced_change_manager.stop_monitoring()
-                if success:
-                    DebugLogger.log("Enhanced change monitoring stopped")
-            elif self.change_manager:
-                success = self.change_manager.stop_monitoring()
-                if success:
-                    DebugLogger.log("Standard change monitoring stopped")
+            success = self.enhanced_change_manager.stop_monitoring()
+            if success:
+                DebugLogger.log("Enhanced change monitoring stopped")
             return success
         except Exception as e:
             DebugLogger.log_error("Failed to stop change monitoring", e)
@@ -142,15 +111,11 @@ class ChangeManagerIntegration:
         Returns:
             True if update successful
         """
-        if not (self.change_manager or self.enhanced_change_manager):
+        if not self.enhanced_change_manager:
             return False
         
         try:
-            success = False
-            if self.enhanced_change_manager:
-                success = self.enhanced_change_manager.update_dem_layer(new_dem_layer)
-            elif self.change_manager:
-                success = self.change_manager.update_dem_layer(new_dem_layer)
+            success = self.enhanced_change_manager.update_dem_layer(new_dem_layer)
             
             if success:
                 self._current_dem_layer = new_dem_layer
@@ -170,22 +135,15 @@ class ChangeManagerIntegration:
             diameter_m: Pipe diameter in meters
             slope_m_per_m: Pipe slope (dimensionless)
         """
-        if self.enhanced_change_manager or self.change_manager:
+        if self.enhanced_change_manager:
             # Convert diameter from mm to m if needed (assuming UI provides mm)
             diameter_in_m = diameter_m / 1000.0 if diameter_m > 1.0 else diameter_m
             
-            if self.enhanced_change_manager:
-                self.enhanced_change_manager.update_depth_parameters(
-                    min_cover_m=min_cover_m,
-                    diameter_m=diameter_in_m,
-                    slope_m_per_m=slope_m_per_m
-                )
-            elif self.change_manager:
-                self.change_manager.update_depth_parameters(
-                    min_cover_m=min_cover_m,
-                    diameter_m=diameter_in_m,
-                    slope_m_per_m=slope_m_per_m
-                )
+            self.enhanced_change_manager.update_depth_parameters(
+                min_cover_m=min_cover_m,
+                diameter_m=diameter_in_m,
+                slope_m_per_m=slope_m_per_m
+            )
             
             DebugLogger.log(f"Updated parameters: cover={min_cover_m}m, "
                           f"diameter={diameter_in_m}m, slope={slope_m_per_m}")
@@ -200,7 +158,7 @@ class ChangeManagerIntegration:
         Returns:
             Dictionary with recalculation statistics
         """
-        if not (self.change_manager or self.enhanced_change_manager):
+        if not self.enhanced_change_manager:
             return {'error': 'Change manager not initialized'}
         
         try:
@@ -210,12 +168,8 @@ class ChangeManagerIntegration:
                 if not feature_ids:
                     return {'error': 'No features selected'}
             
-            if self.enhanced_change_manager:
-                stats = self.enhanced_change_manager.force_full_recalculation(feature_ids)
-                DebugLogger.log(f"Enhanced manual recalculation complete: {stats}")
-            else:
-                stats = self.change_manager.force_full_recalculation(feature_ids)
-                DebugLogger.log(f"Standard manual recalculation complete: {stats}")
+            stats = self.enhanced_change_manager.force_full_recalculation(feature_ids)
+            DebugLogger.log(f"Enhanced manual recalculation complete: {stats}")
             return stats
             
         except Exception as e:
@@ -229,11 +183,11 @@ class ChangeManagerIntegration:
         Returns:
             Dictionary with processing statistics
         """
-        if not self.change_manager:
+        if not self.enhanced_change_manager:
             return {'error': 'Change manager not initialized'}
         
         try:
-            stats = self.change_manager.manual_process_changes()
+            stats = self.enhanced_change_manager.manual_process_changes()
             DebugLogger.log(f"Processed pending changes: {stats}")
             return stats
         except Exception as e:
@@ -247,11 +201,11 @@ class ChangeManagerIntegration:
         Returns:
             Dictionary with system status information
         """
-        if not self.change_manager:
+        if not self.enhanced_change_manager:
             return {'initialized': False}
         
         try:
-            stats = self.change_manager.get_network_statistics()
+            stats = self.enhanced_change_manager.get_network_statistics()
             stats['initialized'] = True
             return stats
         except Exception as e:
@@ -265,8 +219,8 @@ class ChangeManagerIntegration:
         Args:
             enabled: True to enable auto-updates, False to disable
         """
-        if self.change_manager:
-            self.change_manager.set_auto_update_enabled(enabled)
+        if self.enhanced_change_manager:
+            self.enhanced_change_manager.set_auto_update_enabled(enabled)
             DebugLogger.log(f"Auto-update {'enabled' if enabled else 'disabled'}")
     
     def validate_network_integrity(self) -> dict:
@@ -276,11 +230,11 @@ class ChangeManagerIntegration:
         Returns:
             Dictionary with validation results
         """
-        if not self.change_manager:
+        if not self.enhanced_change_manager:
             return {'error': 'Change manager not initialized'}
         
         try:
-            issues = self.change_manager.validate_network()
+            issues = self.enhanced_change_manager.validate_network()
             return {'issues': issues, 'valid': len(issues) == 0}
         except Exception as e:
             DebugLogger.log_error("Error validating network", e)
@@ -289,9 +243,9 @@ class ChangeManagerIntegration:
     def cleanup(self) -> None:
         """Clean up resources when plugin is unloaded."""
         try:
-            if self.change_manager:
+            if self.enhanced_change_manager:
                 self.stop_change_monitoring()
-                self.change_manager = None
+                self.enhanced_change_manager = None
             
             self._current_vector_layer = None
             self._current_dem_layer = None
@@ -303,19 +257,19 @@ class ChangeManagerIntegration:
     
     def is_monitoring_active(self) -> bool:
         """Check if change monitoring is currently active."""
-        return (self.change_manager is not None and 
-                self.change_manager.is_monitoring_active())
+        return (self.enhanced_change_manager is not None and 
+                self.enhanced_change_manager.is_monitoring_active())
     
     def is_auto_update_enabled(self) -> bool:
         """Check if auto-update is enabled."""
-        return (self.change_manager is not None and 
-                self.change_manager.is_auto_update_enabled())
+        return (self.enhanced_change_manager is not None and 
+                self.enhanced_change_manager.is_auto_update_enabled())
 
 
 # Example usage for integration with dock widget
 def integrate_with_dock_widget(dock_widget, vector_layer, dem_layer):
     """
-    Example of how to integrate the change management system with the dock widget.
+    Example of how to integrate the enhanced change management system with the dock widget.
     
     Args:
         dock_widget: The sewerage depth estimator dock widget
@@ -362,7 +316,7 @@ def integrate_with_dock_widget(dock_widget, vector_layer, dem_layer):
         # Store integration instance in dock widget for later use
         dock_widget._change_integration = change_integration
         
-        DebugLogger.log("Change management system integrated with dock widget")
+        DebugLogger.log("Enhanced change management system integrated with dock widget")
         
         return change_integration
     
