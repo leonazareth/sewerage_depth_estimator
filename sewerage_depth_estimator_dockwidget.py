@@ -1186,11 +1186,10 @@ class SewerageDepthEstimatorDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         vertex_depths = {}  # node_key -> max_depth
         segment_depths = {}  # seg_idx -> (p1_depth, p2_depth)
         
-        # Process from each root segment downstream
-        for root_seg_idx in root_segments:
-            print(f"[SEWERAGE DEBUG] Processing tree from root segment {root_seg_idx}")
-            self._process_downstream_from_root(root_seg_idx, segments, node_connections, 
-                                             vertex_depths, segment_depths, min_cover, diameter, slope, initial_depth)
+        # Process ALL segments in a unified manner, not separately per root
+        print(f"[SEWERAGE DEBUG] Processing unified network from all {len(root_segments)} root segments")
+        self._process_unified_network(root_segments, segments, node_connections, 
+                                    vertex_depths, segment_depths, min_cover, diameter, slope, initial_depth)
         
         # Write final depths to features
         print("[SEWERAGE DEBUG] Writing final depths to features...")
@@ -1200,120 +1199,96 @@ class SewerageDepthEstimatorDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             layer.changeAttributeValue(feature.id(), p2_h_idx, round(p2_depth, 2))
             print(f"[SEWERAGE DEBUG]   Final Feature {feature.id()}: P1_H={round(p1_depth, 2)}m, P2_H={round(p2_depth, 2)}m")
 
-    def _process_downstream_from_root(self, root_seg_idx, segments, node_connections,
-                                    vertex_depths, segment_depths, min_cover, diameter, slope, initial_depth):
-        """Process downstream from a root segment, handling convergent vertices correctly"""
+    def _process_unified_network(self, root_segments, segments, node_connections,
+                               vertex_depths, segment_depths, min_cover, diameter, slope, initial_depth):
+        """Process all segments in unified manner with proper convergent vertex handling"""
         def node_key(pt):
             return f"{pt.x():.6f},{pt.y():.6f}"
         
-        # Use a queue to process segments in proper order
-        queue = [(root_seg_idx, None)]  # (seg_idx, upstream_depth)
+        # Initialize all root segments in queue
+        queue = []
         processed = set()
         
+        # Add all root segments to queue with their initial depths
+        for root_seg_idx in root_segments:
+            upstream_depth = max(initial_depth, min_cover + diameter) if initial_depth > 0 else min_cover + diameter
+            segment = segments[root_seg_idx]
+            p1_key = node_key(segment['p1'])
+            vertex_depths[p1_key] = upstream_depth
+            queue.append((root_seg_idx, upstream_depth))
+            print(f"[SEWERAGE DEBUG] Added root segment {root_seg_idx} to queue with depth {upstream_depth:.2f}m")
+        
+        # Process segments until queue is empty
         while queue:
             seg_idx, upstream_depth = queue.pop(0)
             
             if seg_idx in processed:
+                print(f"[SEWERAGE DEBUG]   Segment {seg_idx} already processed, skipping")
                 continue
                 
             segment = segments[seg_idx]
             p1_key = node_key(segment['p1'])
             p2_key = node_key(segment['p2'])
             
-            print(f"[SEWERAGE DEBUG]   Processing segment {seg_idx} (Feature {segment['feature'].id()})")
+            print(f"[SEWERAGE DEBUG]   Processing segment {seg_idx} (Feature {segment['feature'].id()}) with upstream depth {upstream_depth:.2f}m")
             
-            # Determine upstream depth
-            if upstream_depth is None:
-                # This is a root segment or we need to check if upstream vertex is resolved
-                if p1_key in vertex_depths:
-                    upstream_depth = vertex_depths[p1_key]
-                    print(f"[SEWERAGE DEBUG]     Using resolved upstream depth: {upstream_depth:.2f}m")
-                else:
-                    # This is a true root - use initial depth or minimum cover
-                    upstream_depth = max(initial_depth, min_cover + diameter) if initial_depth > 0 else min_cover + diameter
-                    vertex_depths[p1_key] = upstream_depth
-                    print(f"[SEWERAGE DEBUG]     Root segment - initial upstream depth: {upstream_depth:.2f}m")
-            else:
-                print(f"[SEWERAGE DEBUG]     Using provided upstream depth: {upstream_depth:.2f}m")
-            
-            # Calculate downstream depth
+            # Calculate segment depths
             p1_depth, p2_depth = self._calculate_segment_depths(segment, upstream_depth, min_cover, diameter, slope)
             segment_depths[seg_idx] = (p1_depth, p2_depth)
             processed.add(seg_idx)
             
             print(f"[SEWERAGE DEBUG]     Calculated: {p1_depth:.2f}m -> {p2_depth:.2f}m")
             
-            # Handle downstream vertex (convergent vertex resolution)
-            downstream_segments = [idx for idx, is_upstream in node_connections.get(p2_key, []) if is_upstream]
+            # Check downstream vertex for convergence
+            self._handle_downstream_vertex(seg_idx, p2_key, p2_depth, segments, node_connections, 
+                                         vertex_depths, segment_depths, queue, processed)
+
+    def _handle_downstream_vertex(self, seg_idx, p2_key, p2_depth, segments, node_connections,
+                                vertex_depths, segment_depths, queue, processed):
+        """Handle downstream vertex - check for convergence and add appropriate segments to queue"""
+        upstream_segments_to_p2 = [idx for idx, is_upstream in node_connections.get(p2_key, []) if not is_upstream]
+        downstream_segments = [idx for idx, is_upstream in node_connections.get(p2_key, []) if is_upstream]
+        
+        print(f"[SEWERAGE DEBUG]     Vertex {p2_key}: {len(upstream_segments_to_p2)} upstream, {len(downstream_segments)} downstream")
+        
+        if len(upstream_segments_to_p2) > 1:
+            # CONVERGENT VERTEX - check if ALL upstream segments are processed
+            all_upstream_processed = all(us_idx in processed for us_idx in upstream_segments_to_p2)
+            print(f"[SEWERAGE DEBUG]     CONVERGENT VERTEX: upstream segments {upstream_segments_to_p2}, all processed: {all_upstream_processed}")
+            
+            # Always update vertex depth with maximum from all processed upstream segments
+            upstream_depths = []
+            for us_idx in upstream_segments_to_p2:
+                if us_idx in segment_depths:
+                    us_p2_depth = segment_depths[us_idx][1]
+                    upstream_depths.append((us_idx, us_p2_depth))
+            
+            if upstream_depths:
+                max_depth = max(depth for _, depth in upstream_depths)
+                vertex_depths[p2_key] = max_depth
+                print(f"[SEWERAGE DEBUG]     CONVERGENT VERTEX {p2_key}: Current MAX depth {max_depth:.2f}m from {upstream_depths}")
+                
+                if all_upstream_processed:
+                    # All upstream processed - now we can proceed downstream
+                    print(f"[SEWERAGE DEBUG]     CONVERGENT VERTEX {p2_key}: RESOLVED with depth {max_depth:.2f}m")
+                    for ds_idx in downstream_segments:
+                        if ds_idx not in processed:
+                            queue.append((ds_idx, max_depth))
+                            print(f"[SEWERAGE DEBUG]     Added downstream segment {ds_idx} with resolved depth {max_depth:.2f}m")
+                else:
+                    print(f"[SEWERAGE DEBUG]     CONVERGENT VERTEX {p2_key}: Waiting for more upstream segments")
+        else:
+            # NOT convergent - proceed normally
+            vertex_depths[p2_key] = p2_depth
             
             if len(downstream_segments) == 0:
-                # This is an outlet - just set the vertex depth
-                vertex_depths[p2_key] = p2_depth
                 print(f"[SEWERAGE DEBUG]     Outlet reached: vertex {p2_key} depth = {p2_depth:.2f}m")
-                
-            elif len(downstream_segments) == 1:
-                # Simple continuation - set vertex depth and continue
-                vertex_depths[p2_key] = p2_depth
-                print(f"[SEWERAGE DEBUG]     Simple continuation: vertex {p2_key} depth = {p2_depth:.2f}m")
-                
-                # Add downstream segment to queue
-                ds_idx = downstream_segments[0]
-                if ds_idx not in processed:
-                    queue.append((ds_idx, p2_depth))
-                    print(f"[SEWERAGE DEBUG]     Added downstream segment {ds_idx} to queue with depth {p2_depth:.2f}m")
-                    
             else:
-                # Multiple downstream segments - this is a divergent point (splitter)
-                # Set vertex depth and add all downstream segments
-                vertex_depths[p2_key] = p2_depth
-                print(f"[SEWERAGE DEBUG]     Divergent point: vertex {p2_key} depth = {p2_depth:.2f}m, {len(downstream_segments)} downstream segments")
-                
+                print(f"[SEWERAGE DEBUG]     Normal vertex {p2_key}: depth = {p2_depth:.2f}m")
                 for ds_idx in downstream_segments:
                     if ds_idx not in processed:
                         queue.append((ds_idx, p2_depth))
-                        print(f"[SEWERAGE DEBUG]     Added downstream segment {ds_idx} to queue with depth {p2_depth:.2f}m")
-            
-            # Check if this creates a convergent vertex (multiple upstream segments leading to same downstream vertex)
-            self._check_and_resolve_convergent_vertices(segments, node_connections, vertex_depths, segment_depths, queue, processed)
-
-    def _check_and_resolve_convergent_vertices(self, segments, node_connections, vertex_depths, segment_depths, queue, processed):
-        """Check for convergent vertices and resolve them by taking maximum depth"""
-        def node_key(pt):
-            return f"{pt.x():.6f},{pt.y():.6f}"
-        
-        # Check all vertices that have multiple upstream segments
-        for vertex, connections in node_connections.items():
-            upstream_segments = [idx for idx, is_upstream in connections if not is_upstream]
-            
-            if len(upstream_segments) > 1:  # This is a convergent vertex
-                # Check if ALL upstream segments have been processed
-                all_upstream_processed = all(seg_idx in processed for seg_idx in upstream_segments)
-                
-                if all_upstream_processed:
-                    # Get depths from all upstream segments
-                    upstream_depths = []
-                    for seg_idx in upstream_segments:
-                        if seg_idx in segment_depths:
-                            p2_depth = segment_depths[seg_idx][1]  # downstream depth of upstream segment
-                            upstream_depths.append((seg_idx, p2_depth))
-                    
-                    if upstream_depths:
-                        # Take MAXIMUM depth (deepest pipe governs)
-                        max_depth = max(depth for _, depth in upstream_depths)
-                        current_depth = vertex_depths.get(vertex, 0)
-                        
-                        if max_depth > current_depth:
-                            vertex_depths[vertex] = max_depth
-                            print(f"[SEWERAGE DEBUG]   CONVERGENT VERTEX {vertex}: resolved to MAX depth {max_depth:.2f}m from segments {upstream_depths}")
-                            
-                            # Add downstream segments to queue with new resolved depth
-                            downstream_segments = [idx for idx, is_upstream in connections if is_upstream]
-                            for ds_idx in downstream_segments:
-                                if ds_idx not in processed:
-                                    # Remove any existing queue entries for this segment and add with new depth
-                                    queue[:] = [(idx, depth) for idx, depth in queue if idx != ds_idx]
-                                    queue.append((ds_idx, max_depth))
-                                    print(f"[SEWERAGE DEBUG]     Re-queued downstream segment {ds_idx} with resolved depth {max_depth:.2f}m")
+                        print(f"[SEWERAGE DEBUG]     Added downstream segment {ds_idx} with depth {p2_depth:.2f}m")
 
     def _calculate_segment_depths(self, segment, upstream_depth, min_cover, diameter, slope):
         """Calculate depths for a single segment"""
