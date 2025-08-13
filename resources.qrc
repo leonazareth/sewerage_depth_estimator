@@ -1,0 +1,5 @@
+<RCC>
+    <qresource prefix="/plugins/sewerage_depth_estimator" >
+        <file>icon/main-icon.png</file>
+    </qresource>
+</RCC>
